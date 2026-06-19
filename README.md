@@ -16,8 +16,10 @@ manage fertilizer schedules, and control irrigation/lighting/climate from anywhe
 
 ## Quick start (3 parts)
 
-1. **Backend on the VPS** → see [docs/DEPLOY.md](docs/DEPLOY.md).
-   You'll paste your **new** Anthropic API key into `backend/.env` there (never in the app).
+1. **Backend on the VPS** → easiest with **Dokploy**: [docs/DOKPLOY.md](docs/DOKPLOY.md)
+   (one `docker-compose.yml` runs the API + MQTT broker + DB + web dashboard). Manual
+   install without Docker: [docs/DEPLOY.md](docs/DEPLOY.md). Either way you paste your
+   **new** Anthropic API key into the server config (never in the app).
 2. **Install the app** → copy `dist/greenhouse-v1.0.apk` to your phone, tap it, allow
    "install from unknown sources", open it, and enter your VPS address + login.
    See [docs/APK-INSTALL.md](docs/APK-INSTALL.md).

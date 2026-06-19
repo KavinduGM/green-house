@@ -1,0 +1,12 @@
+# Keep the Docker build context small and clean (deps/builds are recreated in-image)
+**/node_modules
+**/dist
+backend/data
+backend/.env
+app/.env
+app/android
+.git
+*.apk
+*.log
+.DS_Store
+docs

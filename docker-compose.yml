@@ -1,0 +1,33 @@
+# Dokploy: create a "Compose" application, point it at this repo, and deploy.
+# Set the environment variables (below) in Dokploy's UI → Environment tab.
+#
+# Exposes:
+#   8080  -> HTTP API + web dashboard  (point a Dokploy domain here, or use IP:8080)
+#   1883  -> MQTT broker for the ESP32 (raw TCP — connect ESP32 to VPS_IP:1883)
+
+services:
+  greenhouse:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "1883:1883"
+    environment:
+      PORT: 8080
+      MQTT_PORT: 1883
+      MQTT_USERNAME: ${MQTT_USERNAME:-greenhouse}
+      MQTT_PASSWORD: ${MQTT_PASSWORD:?set a strong MQTT password}
+      APP_EMAIL: ${APP_EMAIL:-kavindu@groovymark.com}
+      APP_PASSWORD: ${APP_PASSWORD:?set your app login password}
+      JWT_SECRET: ${JWT_SECRET:?set a long random secret}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      DB_PATH: /data/greenhouse.db
+      UPLOAD_DIR: /data/uploads
+    volumes:
+      - greenhouse-data:/data
+
+volumes:
+  greenhouse-data:
