@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: #f6f8f5;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  -webkit-tap-highlight-color: transparent;
+  color: #1a2b1f;
+  /* safe-area padding for notched phones */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
+}
+
+* { box-sizing: border-box; }
+
+@layer components {
+  .card { @apply bg-white rounded-2xl shadow-card border border-black/[0.03]; }
+  .btn { @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 font-medium transition active:scale-[0.98] disabled:opacity-50; }
+  .btn-primary { @apply btn bg-leaf-600 text-white hover:bg-leaf-700; }
+  .btn-ghost { @apply btn bg-leaf-50 text-leaf-700 hover:bg-leaf-100; }
+  .btn-danger { @apply btn bg-red-50 text-red-600 hover:bg-red-100; }
+  .input { @apply w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-[15px] outline-none focus:border-leaf-500 focus:ring-2 focus:ring-leaf-500/20; }
+  .label { @apply block text-sm font-medium text-gray-600 mb-1.5; }
+  .chip { @apply inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium; }
+}
+
+/* hide scrollbars on horizontal scrollers */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
