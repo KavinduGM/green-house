@@ -11,7 +11,11 @@ via relays, and reads **temperature/humidity (DHT22)** and **soil moisture**.
 - Diaphragm pump 12 V 4.5 L/min (TY-44520), a light, a fan — all 12 V
 - 12 V power supply for the loads + the pump
 
-## Wiring
+## Wiring diagram
+
+![Greenhouse ESP32 wiring diagram](wiring-diagram.svg)
+
+(Open [`wiring-diagram.svg`](wiring-diagram.svg) for a full-size view.)
 
 | ESP32 pin | Connects to |
 | --- | --- |
@@ -36,16 +40,31 @@ pump's manual/auto run uses minutes. Adjust in the Control screen.
 
 ## Flashing
 
-1. Install **VS Code** + the **PlatformIO** extension (or the PlatformIO CLI).
-2. Open the `firmware/` folder.
-3. Edit `firmware/src/config.h`:
+You have two ways to upload. **Option A (Arduino IDE)** is the easiest.
+
+### Option A — Arduino IDE (recommended)
+1. Install the **Arduino IDE**, then add ESP32 support:
+   *Tools → Board → Boards Manager →* search **esp32** → install **"esp32 by Espressif Systems"**.
+2. *Tools → Manage Libraries* → install all three:
+   - **PubSubClient** (Nick O'Leary)
+   - **ArduinoJson** (Benoit Blanchon, v7)
+   - **DHT sensor library** (Adafruit) — also installs **Adafruit Unified Sensor**
+3. Open **`firmware/arduino/greenhouse_controller/greenhouse_controller.ino`**.
+4. Edit the **CONFIG** block at the top:
    - `WIFI_SSID` / `WIFI_PASSWORD` — your onsite router
    - `MQTT_HOST` — your VPS public IP (or domain)
-   - `MQTT_USER` / `MQTT_PASS` — must match the backend `.env`
-   - Confirm the GPIO pins match your wiring
-   - Calibrate `SOIL_DRY` / `SOIL_WET` (read raw values in dry air vs in water)
-4. Connect the ESP32 by USB and click **Upload** (or `pio run -t upload`).
-5. Open the serial monitor (115200 baud) to watch it connect.
+   - `MQTT_USER` / `MQTT_PASS` — must match the backend env (`MQTT_USERNAME` / `MQTT_PASSWORD`)
+   - confirm the GPIO pins match your wiring; calibrate `SOIL_DRY` / `SOIL_WET`
+5. *Tools → Board →* **ESP32 Dev Module**, pick the **Port**, click **Upload (→)**.
+6. Open *Tools → Serial Monitor* at **115200** baud to watch it connect.
+
+### Option B — PlatformIO
+1. Install **VS Code** + the **PlatformIO** extension (or the PlatformIO CLI).
+2. Open the `firmware/` folder, edit `firmware/src/config.h` (same settings as above).
+3. Connect the ESP32 by USB and **Upload** (or `pio run -t upload`).
+
+> Calibrate the soil sensor: read its raw value in **dry air** → that's `SOIL_DRY`,
+> then fully **in water** → that's `SOIL_WET`. The serial monitor prints readings.
 
 When it connects, it appears **Online** on the app's dashboard and Control screen.
 
