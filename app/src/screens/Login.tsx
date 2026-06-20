@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Sprout, Server } from 'lucide-react';
-import { login, setBaseUrl, getBaseUrl } from '../lib/api';
+import { Sprout, Server, PlayCircle } from 'lucide-react';
+import { login, setBaseUrl, getBaseUrl, enterDemo } from '../lib/api';
 import { useAuth } from '../App';
 import { Spinner } from '../components/ui';
 
@@ -56,8 +56,15 @@ export default function Login() {
           {busy ? <Spinner /> : 'Sign in'}
         </button>
       </form>
-      <p className="text-xs text-gray-400 text-center mt-6">
-        Enter the address where your backend runs, then your app login.
+
+      <div className="flex items-center gap-3 my-5">
+        <div className="h-px bg-gray-200 flex-1" /><span className="text-xs text-gray-400">or</span><div className="h-px bg-gray-200 flex-1" />
+      </div>
+      <button className="btn-ghost w-full !py-3" onClick={async () => { await enterDemo(); setAuthed(true); }}>
+        <PlayCircle size={18} /> Try the demo (no server needed)
+      </button>
+      <p className="text-xs text-gray-400 text-center mt-4">
+        Demo mode uses sample data so you can explore every feature offline.
       </p>
     </div>
   );

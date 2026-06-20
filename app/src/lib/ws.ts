@@ -1,9 +1,11 @@
-import { getBaseUrl, getToken } from './api';
+import { getBaseUrl, getToken, isDemo } from './api';
+import { demoRealtime } from './demo';
 
 type Handler = (e: any) => void;
 
 // Lightweight reconnecting WebSocket for live sensor/state events.
 export function connectRealtime(onEvent: Handler): () => void {
+  if (isDemo()) return demoRealtime(onEvent);
   let ws: WebSocket | null = null;
   let closed = false;
   let retry = 0;

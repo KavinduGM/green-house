@@ -1,15 +1,30 @@
 import { Preferences } from '@capacitor/preferences';
+import { demoRequest } from './demo';
 
 // Persisted settings (token + the VPS base URL the user enters once).
 let _token: string | null = null;
 let _baseUrl = '';
+let _demo = false;
 
 export async function loadSettings() {
   const t = await Preferences.get({ key: 'token' });
   const b = await Preferences.get({ key: 'baseUrl' });
+  const d = await Preferences.get({ key: 'demo' });
   _token = t.value;
   _baseUrl = b.value || guessDefaultBase();
+  _demo = d.value === '1';
   return { token: _token, baseUrl: _baseUrl };
+}
+
+export const isDemo = () => _demo;
+export async function enterDemo() {
+  _demo = true; _token = 'demo';
+  await Preferences.set({ key: 'demo', value: '1' });
+  await Preferences.set({ key: 'token', value: 'demo' });
+}
+export async function exitDemo() {
+  _demo = false;
+  await Preferences.remove({ key: 'demo' });
 }
 
 function guessDefaultBase() {
@@ -36,6 +51,7 @@ export class ApiError extends Error {
 }
 
 async function request<T>(method: string, path: string, body?: unknown, isForm = false): Promise<T> {
+  if (_demo) return demoRequest<T>(method, path, body);
   if (!_baseUrl) throw new ApiError(0, 'Server URL not set');
   const headers: Record<string, string> = {};
   if (_token) headers.Authorization = `Bearer ${_token}`;

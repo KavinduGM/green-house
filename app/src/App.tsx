@@ -1,6 +1,6 @@
 import { useEffect, useState, createContext, useContext } from 'react';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
-import { loadSettings, getToken, setToken } from './lib/api';
+import { loadSettings, getToken, setToken, exitDemo } from './lib/api';
 import { Loading } from './components/ui';
 import BottomNav from './components/BottomNav';
 import Login from './screens/Login';
@@ -24,7 +24,7 @@ export default function App() {
     loadSettings().then(() => { setAuthed(!!getToken()); setReady(true); });
   }, []);
 
-  const logout = () => { setToken(null); setAuthed(false); };
+  const logout = () => { setToken(null); exitDemo(); setAuthed(false); };
 
   if (!ready) return <Loading label="Starting…" />;
 
