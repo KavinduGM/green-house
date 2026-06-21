@@ -154,14 +154,19 @@ CREATE TABLE IF NOT EXISTS settings (
 
 // ---------- Seeding ----------
 export function seed() {
-  // single user
-  const userCount = (db.prepare('SELECT COUNT(*) c FROM users').get() as any).c;
-  if (userCount === 0) {
-    db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run(
-      config.appEmail,
-      bcrypt.hashSync(config.appPassword, 10),
-    );
-    console.log(`[seed] created login user ${config.appEmail}`);
+  // single user — keep email + password in sync with APP_EMAIL / APP_PASSWORD
+  // on every boot, so changing them in the env actually takes effect on redeploy.
+  const existing = db.prepare('SELECT id FROM users WHERE email = ?').get(config.appEmail) as any;
+  const hash = bcrypt.hashSync(config.appPassword, 10);
+  if (!existing) {
+    // if a user exists under a different (old) email, migrate it; else create new
+    const any = db.prepare('SELECT id FROM users LIMIT 1').get() as any;
+    if (any) db.prepare('UPDATE users SET email = ?, password_hash = ? WHERE id = ?').run(config.appEmail, hash, any.id);
+    else db.prepare('INSERT INTO users (email, password_hash) VALUES (?, ?)').run(config.appEmail, hash);
+    console.log(`[seed] login user set to ${config.appEmail}`);
+  } else {
+    db.prepare('UPDATE users SET password_hash = ? WHERE email = ?').run(hash, config.appEmail);
+    console.log(`[seed] synced password for ${config.appEmail} from APP_PASSWORD`);
   }
 
   // greenhouse
