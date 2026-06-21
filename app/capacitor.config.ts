@@ -6,8 +6,12 @@ const config: CapacitorConfig = {
   webDir: 'dist',
   server: {
     androidScheme: 'https',
-    // Allows the app to call your VPS over http/https.
+    // Allows the app to call your VPS over plain http (no domain/TLS yet).
     cleartext: true,
+  },
+  android: {
+    // Let the https web layer call an http backend (mixed content).
+    allowMixedContent: true,
   },
   plugins: {
     StatusBar: { style: 'LIGHT', backgroundColor: '#1f4a2c' },
