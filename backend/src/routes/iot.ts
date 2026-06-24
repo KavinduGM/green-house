@@ -1,9 +1,14 @@
 import { Router } from 'express';
+import multer from 'multer';
+import fs from 'node:fs';
+import path from 'node:path';
 import { db, now } from '../db.js';
-import { sendCommand, pushConfig } from '../mqtt.js';
+import { config } from '../config.js';
+import { sendCommand, pushConfig, sendOta } from '../mqtt.js';
 import { emit } from '../bus.js';
 
 export const iotRouter = Router();
+const fwUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4 * 1024 * 1024 } });
 
 // ---- devices ----
 iotRouter.get('/devices', (_req, res) => {
@@ -28,6 +33,23 @@ iotRouter.get('/devices/:id/sensors/history', (req, res) => {
     db.prepare('SELECT ts, temperature, humidity, soil_moisture FROM sensor_readings WHERE device_id = ? AND ts >= ? ORDER BY ts ASC')
       .all(req.params.id, since),
   );
+});
+
+// ---- OTA: upload a firmware .bin and push it to the device over the air ----
+iotRouter.post('/devices/:id/ota', fwUpload.single('firmware'), (req, res) => {
+  const { id } = req.params;
+  if (!req.file) return res.status(400).json({ error: 'firmware (.bin) file required' });
+  fs.mkdirSync(config.firmwareDir, { recursive: true });
+  const file = path.join(config.firmwareDir, `${id}.bin`);
+  fs.writeFileSync(file, req.file.buffer);
+
+  const device = db.prepare('SELECT online FROM devices WHERE device_id = ?').get(id) as any;
+  // Build a URL the ESP32 can reach. Prefer explicit OTA_BASE_URL, else the request host.
+  const base = config.otaBaseUrl || `${req.protocol}://${req.get('host')}`;
+  const url = `${base}/firmware/${id}.bin?v=${Date.now()}`;
+  sendOta(id, url);
+  emit({ type: 'automation', deviceId: id, message: `OTA push started (${(req.file.size / 1024).toFixed(0)} KB)` });
+  res.json({ ok: true, url, online: !!device?.online, size: req.file.size });
 });
 
 // ---- manual actuator control ----

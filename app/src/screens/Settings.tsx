@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, Server, LogOut, Sparkles, Send, Bot } from 'lucide-react';
+import { useRef } from 'react';
+import { ChevronLeft, Server, LogOut, Sparkles, Send, Bot, Cpu, UploadCloud } from 'lucide-react';
 import { api, getBaseUrl, setBaseUrl } from '../lib/api';
 import { useAuth } from '../App';
 import { Card, Field, Spinner } from '../components/ui';
@@ -40,11 +41,53 @@ export default function Settings() {
           <span className={`chip ${ai ? 'bg-leaf-50 text-leaf-700' : 'bg-gray-100 text-gray-400'}`}>{ai ? 'On' : 'Off'}</span>
         </Card>
 
+        <FirmwareOta />
+
         <button className="btn-danger w-full" onClick={() => { logout(); nav('/'); }}><LogOut size={18} /> Sign out</button>
 
         <p className="text-center text-xs text-gray-300">Greenhouse v1.0 · groovymark</p>
       </div>
     </div>
+  );
+}
+
+function FirmwareOta() {
+  const fileRef = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const onPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    setBusy(true); setMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append('firmware', f);
+      const r = await api.form<{ ok: boolean; online: boolean; size: number }>('/api/devices/greenhouse-01/ota', fd);
+      setMsg({
+        ok: true,
+        text: r.online
+          ? `Pushed ${(r.size / 1024).toFixed(0)} KB. The board is downloading & will reboot in ~30s.`
+          : `Uploaded ${(r.size / 1024).toFixed(0)} KB, but the board is OFFLINE — it'll update when it next connects.`,
+      });
+    } catch (err: any) {
+      setMsg({ ok: false, text: err.message || 'Upload failed' });
+    } finally {
+      setBusy(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <Card>
+      <div className="flex items-center gap-2 mb-1"><Cpu size={18} className="text-leaf-600" /><span className="font-semibold text-sm">Firmware update (OTA)</span></div>
+      <p className="text-xs text-gray-400 mb-3">Upload a compiled <code>.bin</code> to update the ESP32 over the internet — no cable needed.</p>
+      <input ref={fileRef} type="file" accept=".bin" hidden onChange={onPick} />
+      <button className="btn-ghost w-full" disabled={busy} onClick={() => fileRef.current?.click()}>
+        {busy ? <Spinner /> : <UploadCloud size={18} />} {busy ? 'Uploading…' : 'Choose firmware .bin'}
+      </button>
+      {msg && <p className={`text-sm mt-2 rounded-lg px-3 py-2 ${msg.ok ? 'bg-leaf-50 text-leaf-700' : 'bg-red-50 text-red-600'}`}>{msg.text}</p>}
+    </Card>
   );
 }
 

@@ -7,6 +7,7 @@ import { PLANT_CATALOG } from './plantCatalog.js';
 
 fs.mkdirSync(path.dirname(config.dbPath), { recursive: true });
 fs.mkdirSync(config.uploadDir, { recursive: true });
+fs.mkdirSync(config.firmwareDir, { recursive: true });
 
 export const db = new Database(config.dbPath);
 db.pragma('journal_mode = WAL');

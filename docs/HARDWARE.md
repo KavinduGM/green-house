@@ -76,6 +76,34 @@ When it connects, it appears **Online** on the app's dashboard and Control scree
   - Pump runs when soil moisture drops below your threshold (with a max run-time cap).
   Auto keeps working even if the internet or VPS goes down.
 
+## Remote updates (OTA) — no cable after the first flash
+
+The firmware (v1.1+) supports **over-the-air updates** and **self-healing**:
+
+- **Self-healing:** it auto-reconnects WiFi/MQTT, and if it can't get back online
+  within ~5 minutes it **reboots itself** to recover. A WiFi blip no longer leaves
+  it stuck offline.
+- **OTA:** once v1.1 is flashed via USB *one time*, all future updates go over the
+  internet — no cable, no buttons.
+
+### How to push an update remotely
+1. In Arduino IDE, edit the sketch, then **Sketch → Export Compiled Binary**.
+   This creates a `.bin` in the sketch folder (use `…ino.bin`, *not* the
+   `.bootloader.bin` or `.partitions.bin`).
+2. In the **app → Settings → Firmware update (OTA)** → **Choose firmware .bin** →
+   pick that file.
+3. The app uploads it to your VPS; the VPS tells the ESP32 to download and flash it.
+   The board reboots into the new firmware in ~30 seconds.
+   - If the board is **offline** when you upload, it'll grab the update the next time
+     it connects.
+
+> First time only: flash **v1.1 over USB** to get OTA onto the chip. After that,
+> step 1–3 above is all you ever need.
+
+### Tip: a smart plug for emergencies
+Since the board is remote, a cheap **WiFi smart plug** on the ESP32's USB power lets
+you hard power-cycle it from anywhere if it ever truly locks up (rare with self-heal).
+
 ## Safety
 - The firmware caps any single pump run at 30 min (`PUMP_MAX_RUN_MS`) as a flood guard.
 - Use a fused 12 V supply rated above the combined load of pump + fan + light.

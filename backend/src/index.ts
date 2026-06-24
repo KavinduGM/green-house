@@ -23,6 +23,8 @@ app.use(express.json({ limit: '2mb' }));
 
 // uploaded photos (diagrams, defect/event images)
 app.use('/uploads', express.static(config.uploadDir));
+// firmware binaries for OTA (ESP32 downloads from here) — public, no auth
+app.use('/firmware', express.static(config.firmwareDir));
 
 app.get('/api/health', (_req, res) =>
   res.json({ ok: true, ai: hasClaude(), time: new Date().toISOString() }),

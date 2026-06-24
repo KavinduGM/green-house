@@ -92,6 +92,11 @@ export function sendCommand(deviceId: string, cmd: object) {
   aedes.publish({ topic: `gh/${deviceId}/dn/cmd`, payload: Buffer.from(JSON.stringify(cmd)), qos: 1, retain: false, cmd: 'publish', dup: false } as any, () => {});
 }
 
+// Trigger an over-the-air firmware update: tell the device to download + flash from `url`.
+export function sendOta(deviceId: string, url: string) {
+  aedes.publish({ topic: `gh/${deviceId}/dn/ota`, payload: Buffer.from(JSON.stringify({ url })), qos: 1, retain: false, cmd: 'publish', dup: false } as any, () => {});
+}
+
 export function pushConfig(deviceId: string) {
   const rules = db.prepare('SELECT key, config, enabled FROM automation_rules').all() as any[];
   const schedules = db.prepare('SELECT * FROM schedules WHERE device_id = ? AND enabled = 1').all(deviceId);

@@ -1,53 +1,60 @@
 /* =====================================================================
-   GREENHOUSE ESP32 CONTROLLER  —  Arduino IDE sketch
+   GREENHOUSE ESP32 CONTROLLER  —  Arduino IDE sketch  (v1.1, self-healing + OTA)
    ---------------------------------------------------------------------
    Controls: water pump, grow light, blower fan (via relays)
    Reads:    DHT22 (temp/humidity) + capacitive soil-moisture sensor
    Talks to: your VPS backend over MQTT (control from the phone app)
 
-   ----- BEFORE YOU UPLOAD -----
-   1) Arduino IDE → Boards Manager → install "esp32 by Espressif Systems".
+   NEW in v1.1:
+   - Self-healing: auto-reconnects WiFi/MQTT, and REBOOTS itself if it
+     can't get back online within a few minutes (no more "stuck offline").
+   - OTA: push firmware updates over the internet from the app — no cable.
+
+   ----- BEFORE YOU UPLOAD (one time, via USB) -----
+   1) Boards Manager → install "esp32 by Espressif Systems".
    2) Library Manager → install:
         - "PubSubClient" by Nick O'Leary
         - "ArduinoJson" by Benoit Blanchon  (v7)
         - "DHT sensor library" by Adafruit  (+ "Adafruit Unified Sensor")
-   3) Edit the 4 settings in the CONFIG block below.
-   4) Tools → Board → "ESP32 Dev Module", select the COM port, click Upload.
+      (HTTPUpdate + WiFi are built into the ESP32 core — nothing to install.)
+   3) Edit the CONFIG block below.
+   4) Board → "ESP32 Dev Module", select the port, Upload.
+   After this flash, all future updates can be done from the app (OTA).
    ===================================================================== */
 
 #include <WiFi.h>
 #include <PubSubClient.h>
 #include <ArduinoJson.h>
 #include <DHT.h>
+#include <HTTPUpdate.h>
 
 /* ===================== CONFIG — EDIT THESE ===================== */
 #define WIFI_SSID       "YOUR_WIFI_SSID"
 #define WIFI_PASSWORD   "YOUR_WIFI_PASSWORD"
 
-#define MQTT_HOST       "YOUR_VPS_IP"     // e.g. "203.0.113.10"  (your Hostinger VPS)
+#define MQTT_HOST       "72.60.201.67"      // your Hostinger VPS IP
 #define MQTT_PORT       1883
-#define MQTT_USER       "greenhouse"       // = backend MQTT_USERNAME
-#define MQTT_PASS       "change-me-mqtt"    // = backend MQTT_PASSWORD
+#define MQTT_USER       "greenhouse"
+#define MQTT_PASS       "0eyYG1ihBnUNG8Q4cGo7"
 
-#define DEVICE_ID       "greenhouse-01"     // keep as-is (matches the seeded device)
-#define FW_VERSION      "fw-1.0.0"
+#define DEVICE_ID       "greenhouse-01"
+#define FW_VERSION      "fw-1.1.0"
 
-/* ---- GPIO pin map (match your wiring / the diagram) ---- */
+/* ---- GPIO pin map ---- */
 #define PIN_RELAY_PUMP  26
 #define PIN_RELAY_LIGHT 27
 #define PIN_RELAY_FAN   25
-#define PIN_DHT         4        // DHT22 data
-#define PIN_SOIL        34       // soil moisture analog (input-only pin)
+#define PIN_DHT         4
+#define PIN_SOIL        34
 
-// Most cheap relay boards are ACTIVE-LOW (LOW = ON). Set false if yours is active-high.
 #define RELAY_ACTIVE_LOW true
 
-// Soil calibration (raw 12-bit ADC): reading in dry air, and fully in water.
 #define SOIL_DRY        3200
 #define SOIL_WET        1300
 
-#define SENSOR_INTERVAL_MS  10000     // publish sensors every 10 s
-#define PUMP_MAX_RUN_MS     1800000   // safety: never run pump > 30 min
+#define SENSOR_INTERVAL_MS   10000     // publish sensors every 10 s
+#define PUMP_MAX_RUN_MS      1800000   // pump flood-safety cap (30 min)
+#define OFFLINE_REBOOT_MS    300000    // reboot if no MQTT for 5 min (self-heal)
 /* ============================================================== */
 
 WiFiClient   net;
@@ -67,6 +74,8 @@ struct { float onBelow = 35, offAbove = 60; int maxRunMin = 15; bool enabled = t
 
 float gTemp = NAN, gHum = NAN, gSoil = NAN;
 uint32_t lastSensor = 0;
+uint32_t lastMqttOk = 0;
+uint32_t lastReconnect = 0;
 char topicBuf[64];
 
 Act* findAct(const char* k) { for (auto &a : acts) if (strcmp(a.key, k) == 0) return &a; return nullptr; }
@@ -89,7 +98,7 @@ void publishState() {
 void setActuator(Act &a, bool on, uint32_t durationMs = 0) {
   a.on = on;
   a.offAt = (on && durationMs > 0) ? millis() + durationMs : 0;
-  if (strcmp(a.key, "pump") == 0 && on) {        // global pump flood-safety cap
+  if (strcmp(a.key, "pump") == 0 && on) {
     uint32_t cap = millis() + PUMP_MAX_RUN_MS;
     if (a.offAt == 0 || a.offAt > cap) a.offAt = cap;
   }
@@ -133,14 +142,23 @@ void runAutomation() {
     }
     if (want != fan->on) setActuator(*fan, want);
   }
-
   Act *pump = findAct("pump");
   if (pump && pump->mode == "auto" && pumpSoil.enabled && !isnan(gSoil)) {
-    if (!pump->on && gSoil <= pumpSoil.onBelow)
-      setActuator(*pump, true, (uint32_t)pumpSoil.maxRunMin * 60000UL);
-    else if (pump->on && gSoil >= pumpSoil.offAbove)
-      setActuator(*pump, false);
+    if (!pump->on && gSoil <= pumpSoil.onBelow) setActuator(*pump, true, (uint32_t)pumpSoil.maxRunMin * 60000UL);
+    else if (pump->on && gSoil >= pumpSoil.offAbove) setActuator(*pump, false);
   }
+}
+
+void doOta(const char* url) {
+  Serial.printf("OTA: downloading %s\n", url);
+  WiFiClient otaClient;
+  httpUpdate.rebootOnUpdate(true);   // reboots into new firmware on success
+  t_httpUpdate_return ret = httpUpdate.update(otaClient, url);
+  if (ret == HTTP_UPDATE_FAILED)
+    Serial.printf("OTA failed (%d): %s\n", httpUpdate.getLastError(), httpUpdate.getLastErrorString().c_str());
+  else if (ret == HTTP_UPDATE_NO_UPDATES)
+    Serial.println("OTA: no update");
+  // on success the chip reboots automatically
 }
 
 void onMessage(char* topic, byte* payload, unsigned int len) {
@@ -152,6 +170,10 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     if (!a) return;
     uint32_t dur = d["duration_min"].is<int>() ? (uint32_t)d["duration_min"] * 60000UL : 0;
     setActuator(*a, strcmp(d["action"] | "", "on") == 0, dur);
+  }
+  else if (strstr(topic, "/dn/ota")) {
+    const char* url = d["url"] | "";
+    if (strlen(url) > 0) doOta(url);
   }
   else if (strstr(topic, "/dn/config")) {
     JsonObject r = d["rules"];
@@ -167,31 +189,27 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
   }
 }
 
-void connectMqtt() {
-  while (!mqtt.connected()) {
-    Serial.print("MQTT… ");
-    if (mqtt.connect(DEVICE_ID, MQTT_USER, MQTT_PASS)) {
-      Serial.println("connected");
-      mqtt.subscribe(T("dn/cmd"));
-      mqtt.subscribe(T("dn/config"));
-      StaticJsonDocument<96> d; d["name"] = "Greenhouse Controller"; d["fw"] = FW_VERSION;
-      char buf[96]; size_t n = serializeJson(d, buf);
-      mqtt.publish(T("up/hello"), (uint8_t*)buf, n, false);
-      publishState();
-    } else {
-      Serial.printf("failed rc=%d, retry in 2s\n", mqtt.state());
-      delay(2000);
-    }
-  }
+bool mqttConnectOnce() {
+  if (!mqtt.connect(DEVICE_ID, MQTT_USER, MQTT_PASS)) return false;
+  mqtt.subscribe(T("dn/cmd"));
+  mqtt.subscribe(T("dn/config"));
+  mqtt.subscribe(T("dn/ota"));
+  StaticJsonDocument<96> d; d["name"] = "Greenhouse Controller"; d["fw"] = FW_VERSION;
+  char buf[96]; size_t n = serializeJson(d, buf);
+  mqtt.publish(T("up/hello"), (uint8_t*)buf, n, false);
+  publishState();
+  return true;
 }
 
 void setup() {
   Serial.begin(115200);
-  for (auto &a : acts) { pinMode(a.pin, OUTPUT); applyRelay(a); }   // start all OFF
+  for (auto &a : acts) { pinMode(a.pin, OUTPUT); applyRelay(a); }
   analogReadResolution(12);
   dht.begin();
 
   WiFi.mode(WIFI_STA);
+  WiFi.setAutoReconnect(true);
+  WiFi.persistent(true);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("WiFi…");
   uint32_t start = millis();
@@ -201,19 +219,40 @@ void setup() {
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(onMessage);
   mqtt.setBufferSize(512);
+  mqtt.setKeepAlive(20);
+  lastMqttOk = millis();   // grace period before the self-heal reboot can fire
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) { WiFi.reconnect(); delay(500); }
-  if (!mqtt.connected()) connectMqtt();
-  mqtt.loop();
-
   uint32_t nowMs = millis();
+
+  // ---- connection management (non-blocking, self-healing) ----
+  if (WiFi.status() == WL_CONNECTED) {
+    if (!mqtt.connected()) {
+      if (nowMs - lastReconnect > 5000) {
+        lastReconnect = nowMs;
+        Serial.print("MQTT… ");
+        Serial.println(mqttConnectOnce() ? "connected" : "retry");
+      }
+    } else {
+      mqtt.loop();
+      lastMqttOk = nowMs;
+    }
+  }
+  // if we've been unable to reach the broker for too long, reboot to recover
+  if (nowMs - lastMqttOk > OFFLINE_REBOOT_MS) {
+    Serial.println("Offline too long — rebooting to recover…");
+    delay(200);
+    ESP.restart();
+  }
+
+  // ---- duration auto-off ----
   for (auto &a : acts) if (a.on && a.offAt && nowMs >= a.offAt) setActuator(a, false);
 
+  // ---- sensors + automation ----
   if (nowMs - lastSensor >= SENSOR_INTERVAL_MS) {
     lastSensor = nowMs;
-    readAndPublishSensors();
+    if (mqtt.connected()) readAndPublishSensors();
     runAutomation();
   }
 }
