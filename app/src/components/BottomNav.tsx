@@ -1,15 +1,16 @@
 import { NavLink } from 'react-router-dom';
-import { LayoutDashboard, Map, Sprout, Eye, ToggleLeft } from 'lucide-react';
+import { LayoutDashboard, Map, Sprout, Eye, ToggleLeft, CloudSun } from 'lucide-react';
 
-const items = [
-  { to: '/dashboard', icon: LayoutDashboard, label: 'Home' },
-  { to: '/greenhouse', icon: Map, label: 'Layout' },
-  { to: '/plants', icon: Sprout, label: 'Plants' },
-  { to: '/visualizer', icon: Eye, label: 'Visual' },
-  { to: '/control', icon: ToggleLeft, label: 'Control' },
-];
-
-export default function BottomNav() {
+export default function BottomNav({ hasIot }: { hasIot: boolean }) {
+  const items = [
+    { to: '/dashboard', icon: LayoutDashboard, label: 'Home' },
+    { to: '/greenhouse', icon: Map, label: 'Layout' },
+    { to: '/plants', icon: Sprout, label: 'Plants' },
+    { to: '/visualizer', icon: Eye, label: 'Visual' },
+    hasIot
+      ? { to: '/control', icon: ToggleLeft, label: 'Control' }
+      : { to: '/weather', icon: CloudSun, label: 'Weather' },
+  ];
   return (
     <nav className="fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur border-t border-black/5"
       style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>

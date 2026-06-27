@@ -56,15 +56,16 @@ export function materializeProgram(plantingId: number, p: PlantingRow) {
 }
 
 /** Fertilizer tasks due within `windowDays` (default: now and overdue), across all active plantings. */
-export function dueFertilizer(todayIso: string, windowDays = 2) {
+export function dueFertilizer(todayIso: string, windowDays = 2, projectId?: number) {
   const rows = db
     .prepare(
       `SELECT fp.*, pl.name as planting_name, pl.planted_date, pl.plant_type_key
        FROM fertilizer_plan fp
        JOIN plantings pl ON pl.id = fp.planting_id
-       WHERE fp.status = 'pending' AND pl.status = 'active'`,
+       WHERE fp.status = 'pending' AND pl.status = 'active'
+         AND (? IS NULL OR pl.project_id = ?)`,
     )
-    .all() as any[];
+    .all(projectId ?? null, projectId ?? null) as any[];
   const today = Date.parse(todayIso);
   return rows
     .map((r) => {

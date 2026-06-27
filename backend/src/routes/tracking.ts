@@ -7,6 +7,7 @@ import { config, hasClaude } from '../config.js';
 import { timeline, predictedForLog, getModel, type PlantingRow } from '../services/growth.js';
 import { dueFertilizer } from '../services/fertilizer.js';
 import { growthInsight, diagnoseDefect } from '../services/claude.js';
+import { projectId } from '../project.js';
 
 export const trackingRouter = Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 * 1024 * 1024 } });
@@ -119,8 +120,8 @@ trackingRouter.get('/plantings/:id/fertilizer', (req, res) => {
   res.json(rows.map((r) => ({ ...r, due_date: new Date(base + r.day_offset * 86_400_000).toISOString().slice(0, 10) })));
 });
 
-trackingRouter.get('/fertilizer/due', (_req, res) => {
-  res.json(dueFertilizer(new Date().toISOString(), 3));
+trackingRouter.get('/fertilizer/due', (req, res) => {
+  res.json(dueFertilizer(new Date().toISOString(), 3, projectId(req)));
 });
 
 trackingRouter.post('/fertilizer/:itemId/apply', (req, res) => {
@@ -140,10 +141,10 @@ trackingRouter.post('/fertilizer/:itemId/skip', (req, res) => {
 });
 
 // ---- 2D visualizer data: expected size now (and actual) per planting ----
-trackingRouter.get('/visualizer', (_req, res) => {
+trackingRouter.get('/visualizer', (req, res) => {
   const plantings = db
-    .prepare("SELECT * FROM plantings WHERE status = 'active'")
-    .all() as PlantingRow[];
+    .prepare("SELECT * FROM plantings WHERE status = 'active' AND project_id = ?")
+    .all(projectId(req)) as PlantingRow[];
   const out = plantings.map((p) => {
     const t = timeline(p, new Date().toISOString());
     const latestActual = t.actuals.at(-1)?.value ?? null;

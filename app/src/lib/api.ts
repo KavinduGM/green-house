@@ -5,15 +5,25 @@ import { demoRequest } from './demo';
 let _token: string | null = null;
 let _baseUrl = '';
 let _demo = false;
+let _projectId: number | null = null;
 
 export async function loadSettings() {
   const t = await Preferences.get({ key: 'token' });
   const b = await Preferences.get({ key: 'baseUrl' });
   const d = await Preferences.get({ key: 'demo' });
+  const pj = await Preferences.get({ key: 'projectId' });
   _token = t.value;
   _baseUrl = b.value || guessDefaultBase();
   _demo = d.value === '1';
+  _projectId = pj.value ? Number(pj.value) : null;
   return { token: _token, baseUrl: _baseUrl };
+}
+
+export const getProjectId = () => _projectId;
+export async function setProjectId(id: number | null) {
+  _projectId = id;
+  if (id) await Preferences.set({ key: 'projectId', value: String(id) });
+  else await Preferences.remove({ key: 'projectId' });
 }
 
 export const isDemo = () => _demo;
@@ -55,6 +65,7 @@ async function request<T>(method: string, path: string, body?: unknown, isForm =
   if (!_baseUrl) throw new ApiError(0, 'Server URL not set');
   const headers: Record<string, string> = {};
   if (_token) headers.Authorization = `Bearer ${_token}`;
+  if (_projectId) headers['X-Project-Id'] = String(_projectId);
   let payload: BodyInit | undefined;
   if (body instanceof FormData) { payload = body; }
   else if (body !== undefined) { headers['Content-Type'] = 'application/json'; payload = JSON.stringify(body); }

@@ -1,7 +1,11 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { config, hasClaude } from '../config.js';
 
-const client = hasClaude() ? new Anthropic({ apiKey: config.anthropicApiKey }) : null;
+// Generous timeout + retries: vision calls can be slow and the connection to
+// the API occasionally drops mid-response ("Premature close") — retry those.
+const client = hasClaude()
+  ? new Anthropic({ apiKey: config.anthropicApiKey, maxRetries: 4, timeout: 120_000 })
+  : null;
 
 type ImageMedia = 'image/jpeg' | 'image/png' | 'image/webp';
 
@@ -14,15 +18,33 @@ function extractJson<T>(text: string, fallback: T): T {
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 async function complete(system: string, content: Anthropic.MessageParam['content'], maxTokens = 1500): Promise<string> {
   if (!client) throw new Error('AI is not configured. Set ANTHROPIC_API_KEY on the server.');
-  const res = await client.messages.create({
-    model: config.anthropicModel,
-    max_tokens: maxTokens,
-    system,
-    messages: [{ role: 'user', content }],
-  });
-  return res.content.filter((b) => b.type === 'text').map((b: any) => b.text).join('\n');
+  let lastErr: any;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      // Stream the response and accumulate — far more resilient to dropped
+      // connections than a single buffered request (fixes "Premature close").
+      const stream = client.messages.stream({
+        model: config.anthropicModel,
+        max_tokens: maxTokens,
+        system,
+        messages: [{ role: 'user', content }],
+      });
+      const msg = await stream.finalMessage();
+      return msg.content.filter((b) => b.type === 'text').map((b: any) => b.text).join('\n');
+    } catch (e: any) {
+      lastErr = e;
+      const transient = /premature close|ECONNRESET|ETIMEDOUT|terminated|socket hang up|fetch failed|529|503|overloaded/i.test(
+        `${e?.message ?? ''} ${e?.cause?.message ?? ''} ${e?.status ?? ''}`,
+      );
+      if (!transient || attempt === 2) break;
+      await sleep(800 * (attempt + 1));
+    }
+  }
+  throw lastErr;
 }
 
 export interface ParsedDiagram {

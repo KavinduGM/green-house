@@ -1,15 +1,24 @@
 import { useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Thermometer, Droplets, Sprout, Settings as Cog, Wifi, WifiOff, Bell, CalendarClock, Power } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import {
+  Thermometer, Droplets, Sprout, Settings as Cog, Wifi, WifiOff, Bell, CalendarClock, Power,
+  ChevronDown, Check, Plus, CloudSun,
+} from 'lucide-react';
 import { api } from '../lib/api';
 import { connectRealtime } from '../lib/ws';
+import { useProject } from '../App';
 import type { Dashboard as Dash } from '../lib/types';
-import { Card, Loading, SectionTitle, Pill } from '../components/ui';
+import { Card, Loading, SectionTitle, Pill, Modal } from '../components/ui';
+import { WeatherCard } from '../components/WeatherCard';
 
 export default function Dashboard() {
+  const { current, projects, switchProject } = useProject();
+  const nav = useNavigate();
   const [d, setD] = useState<Dash | null>(null);
   const [live, setLive] = useState<{ temperature?: number; humidity?: number; soil_moisture?: number }>({});
+  const [switcher, setSwitcher] = useState(false);
 
+  const hasIot = current?.has_iot;
   const load = () => api.get<Dash>('/api/dashboard').then(setD).catch(() => {});
   useEffect(() => {
     load();
@@ -34,44 +43,63 @@ export default function Dashboard() {
   return (
     <div className="px-4 pt-4 space-y-4">
       <header className="flex items-center justify-between">
-        <div>
+        <button className="text-left min-w-0" onClick={() => setSwitcher(true)}>
           <p className="text-sm text-gray-400">Welcome back 🌱</p>
-          <h1 className="text-xl font-bold text-leaf-800">{d.device?.name ?? 'Greenhouse'}</h1>
-        </div>
+          <h1 className="text-xl font-bold text-leaf-800 flex items-center gap-1 truncate">
+            {current?.name} <ChevronDown size={18} className="text-leaf-500 shrink-0" />
+          </h1>
+        </button>
         <div className="flex items-center gap-2">
-          <span className={`chip ${online ? 'bg-leaf-50 text-leaf-700' : 'bg-gray-100 text-gray-400'}`}>
-            {online ? <Wifi size={13} /> : <WifiOff size={13} />} {online ? 'Online' : 'Offline'}
-          </span>
+          {hasIot && (
+            <span className={`chip ${online ? 'bg-leaf-50 text-leaf-700' : 'bg-gray-100 text-gray-400'}`}>
+              {online ? <Wifi size={13} /> : <WifiOff size={13} />} {online ? 'Online' : 'Offline'}
+            </span>
+          )}
           <Link to="/settings" className="p-2 rounded-full bg-white shadow-card text-gray-500"><Cog size={20} /></Link>
         </div>
       </header>
 
-      {/* sensor tiles */}
-      <div className="grid grid-cols-3 gap-3">
-        <Sensor icon={<Thermometer size={18} />} label="Temp" value={fmt(s.temperature, '°C')} tone="text-orange-500" />
-        <Sensor icon={<Droplets size={18} />} label="Humidity" value={fmt(s.humidity, '%')} tone="text-sky-500" />
-        <Sensor icon={<Sprout size={18} />} label="Soil" value={fmt(s.soil_moisture, '%')} tone="text-leaf-600" />
-      </div>
+      {/* weather — every project with a location */}
+      {d.weather ? <WeatherCard weather={d.weather} compact /> : (
+        !current?.latitude && (
+          <Card className="flex items-center gap-3 text-sm text-gray-500">
+            <CloudSun size={20} className="text-leaf-400" />
+            <span className="flex-1">Add a location to see live weather.</span>
+            <Link to="/projects" className="text-leaf-600 font-medium text-xs">Set</Link>
+          </Card>
+        )
+      )}
 
-      {/* quick controls */}
-      <Card>
-        <SectionTitle action={<Link to="/control" className="text-xs text-leaf-600 font-medium">Manage →</Link>}>Quick control</SectionTitle>
-        <div className="grid grid-cols-3 gap-3">
-          {['pump', 'light', 'fan'].map((k) => {
-            const a = d.actuators.find((x) => x.key === k);
-            const on = a?.state;
-            return (
-              <button key={k} onClick={() => toggle(k, !on)} disabled={!online}
-                className={`rounded-2xl p-3 flex flex-col items-center gap-1.5 border transition disabled:opacity-40 ${
-                  on ? 'bg-leaf-600 text-white border-leaf-600' : 'bg-white text-gray-500 border-gray-200'}`}>
-                <Power size={20} />
-                <span className="text-xs font-medium capitalize">{k}</span>
-                <span className="text-[10px] opacity-80">{on ? 'ON' : 'OFF'}</span>
-              </button>
-            );
-          })}
-        </div>
-      </Card>
+      {/* IoT sensors + quick control — smart projects only */}
+      {hasIot && (
+        <>
+          <div className="grid grid-cols-3 gap-3">
+            <Sensor icon={<Thermometer size={18} />} label="Temp" value={fmt(s.temperature, '°C')} tone="text-orange-500" />
+            <Sensor icon={<Droplets size={18} />} label="Humidity" value={fmt(s.humidity, '%')} tone="text-sky-500" />
+            <Sensor icon={<Sprout size={18} />} label="Soil" value={fmt(s.soil_moisture, '%')} tone="text-leaf-600" />
+          </div>
+
+          {d.actuators.length > 0 && (
+            <Card>
+              <SectionTitle action={<Link to="/control" className="text-xs text-leaf-600 font-medium">Manage →</Link>}>Quick control</SectionTitle>
+              <div className="grid grid-cols-3 gap-3">
+                {d.actuators.slice(0, 6).map((a) => {
+                  const on = a.state;
+                  return (
+                    <button key={a.key} onClick={() => toggle(a.key, !on)} disabled={!online}
+                      className={`rounded-2xl p-3 flex flex-col items-center gap-1.5 border transition disabled:opacity-40 ${
+                        on ? 'bg-leaf-600 text-white border-leaf-600' : 'bg-white text-gray-500 border-gray-200'}`}>
+                      <Power size={20} />
+                      <span className="text-xs font-medium truncate max-w-full">{a.name || a.key}</span>
+                      <span className="text-[10px] opacity-80">{on ? 'ON' : 'OFF'}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </Card>
+          )}
+        </>
+      )}
 
       {/* fertilizer reminders */}
       <div>
@@ -96,7 +124,6 @@ export default function Dashboard() {
         )}
       </div>
 
-      {/* upcoming milestones */}
       {d.upcomingMilestones.length > 0 && (
         <div>
           <SectionTitle>This week</SectionTitle>
@@ -117,6 +144,27 @@ export default function Dashboard() {
         <Stat n={d.counts.totalPlants} label="Plants" />
         <Stat n={d.counts.bags} label="Grow bags" />
       </div>
+
+      {/* project switcher */}
+      <Modal open={switcher} onClose={() => setSwitcher(false)} title="Switch project">
+        <div className="space-y-2">
+          {projects.map((p) => (
+            <button key={p.id} onClick={() => { switchProject(p.id); setSwitcher(false); }}
+              className={`w-full flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left ${
+                p.id === current?.id ? 'border-leaf-500 bg-leaf-50' : 'border-gray-200'}`}>
+              <Sprout size={18} className="text-leaf-600" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm truncate">{p.name}</p>
+                <p className="text-[11px] text-gray-400 capitalize">{p.environment}{p.has_iot ? ' · smart' : ''}</p>
+              </div>
+              {p.id === current?.id && <Check size={16} className="text-leaf-600" />}
+            </button>
+          ))}
+          <button className="btn-ghost w-full mt-1" onClick={() => { setSwitcher(false); nav('/projects'); }}>
+            <Plus size={16} /> New / manage projects
+          </button>
+        </div>
+      </Modal>
     </div>
   );
 }

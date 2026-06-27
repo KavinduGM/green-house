@@ -13,11 +13,54 @@ const fwUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 4
 // ---- devices ----
 iotRouter.get('/devices', (_req, res) => {
   const devices = db.prepare('SELECT * FROM devices').all() as any[];
-  const acts = db.prepare('SELECT * FROM actuators').all() as any[];
+  const acts = db.prepare('SELECT * FROM actuators ORDER BY sort, key').all() as any[];
   res.json(devices.map((d) => ({
     ...d, online: !!d.online,
-    actuators: acts.filter((a) => a.device_id === d.device_id).map((a) => ({ ...a, state: !!a.state })),
+    actuators: acts.filter((a) => a.device_id === d.device_id)
+      .map((a) => ({ ...a, state: !!a.state, active_low: !!a.active_low, is_default: !!a.is_default })),
   })));
+});
+
+// ---- add / edit / remove custom actuator buttons (define the GPIO pin) ----
+const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 24) || 'relay';
+
+iotRouter.post('/devices/:id/actuators', (req, res) => {
+  const { id } = req.params;
+  const { name, pin, active_low = true, safety_cap_min } = req.body ?? {};
+  if (!name || pin === undefined || pin === null) return res.status(400).json({ error: 'name and pin required' });
+  // unique key from name
+  let key = slug(String(name));
+  const exists = (k: string) => db.prepare('SELECT 1 FROM actuators WHERE device_id = ? AND key = ?').get(id, k);
+  let n = 2; const base = key;
+  while (exists(key)) key = `${base}_${n++}`;
+  const maxSort = (db.prepare('SELECT COALESCE(MAX(sort),-1) m FROM actuators WHERE device_id = ?').get(id) as any).m;
+  db.prepare(
+    `INSERT INTO actuators (device_id, key, state, mode, name, pin, active_low, safety_cap_min, sort, is_default)
+     VALUES (?, ?, 0, 'manual', ?, ?, ?, ?, ?, 0)`,
+  ).run(id, key, String(name), Number(pin), active_low ? 1 : 0, safety_cap_min ? Number(safety_cap_min) : null, maxSort + 1);
+  pushConfig(id);
+  res.json({ ok: true, key });
+});
+
+iotRouter.put('/devices/:id/actuators/:key/def', (req, res) => {
+  const { id, key } = req.params;
+  const { name, pin, active_low, safety_cap_min } = req.body ?? {};
+  db.prepare(
+    `UPDATE actuators SET name=COALESCE(?,name), pin=COALESCE(?,pin),
+       active_low=COALESCE(?,active_low), safety_cap_min=? WHERE device_id=? AND key=?`,
+  ).run(name ?? null, pin ?? null, active_low === undefined ? null : active_low ? 1 : 0,
+    safety_cap_min ?? null, id, key);
+  pushConfig(id);
+  res.json({ ok: true });
+});
+
+iotRouter.delete('/devices/:id/actuators/:key', (req, res) => {
+  const { id, key } = req.params;
+  db.prepare('DELETE FROM actuators WHERE device_id = ? AND key = ?').run(id, key);
+  db.prepare('DELETE FROM auto_rules WHERE device_id = ? AND actuator_key = ?').run(id, key);
+  db.prepare('DELETE FROM schedules WHERE device_id = ? AND actuator_key = ?').run(id, key);
+  pushConfig(id);
+  res.json({ ok: true });
 });
 
 // ---- sensors ----
@@ -112,20 +155,41 @@ iotRouter.delete('/schedules/:id', (req, res) => {
   res.json({ ok: true });
 });
 
-// ---- automation rules (climate control thresholds) ----
-iotRouter.get('/automation-rules', (_req, res) => {
-  const rows = db.prepare('SELECT * FROM automation_rules').all() as any[];
-  res.json(rows.map((r) => ({ key: r.key, enabled: !!r.enabled, config: JSON.parse(r.config) })));
+// ---- automation rules (generic: any actuator + sensor + thresholds) ----
+iotRouter.get('/devices/:id/auto-rules', (req, res) => {
+  const rows = db.prepare('SELECT * FROM auto_rules WHERE device_id = ? ORDER BY id').all(req.params.id) as any[];
+  res.json(rows.map((r) => ({ ...r, enabled: !!r.enabled })));
 });
 
-iotRouter.put('/automation-rules/:key', (req, res) => {
-  const { config: cfg, enabled } = req.body ?? {};
-  const existing = db.prepare('SELECT config FROM automation_rules WHERE key = ?').get(req.params.key) as any;
-  const merged = { ...(existing ? JSON.parse(existing.config) : {}), ...(cfg ?? {}) };
+iotRouter.post('/devices/:id/auto-rules', (req, res) => {
+  const { id } = req.params;
+  const { actuator_key, sensor, on_above, off_below, on_below, off_above, max_run_min } = req.body ?? {};
+  if (!actuator_key || !sensor) return res.status(400).json({ error: 'actuator_key and sensor required' });
+  const info = db
+    .prepare(`INSERT INTO auto_rules (device_id, actuator_key, sensor, on_above, off_below, on_below, off_above, max_run_min, enabled)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)`)
+    .run(id, actuator_key, sensor, num(on_above), num(off_below), num(on_below), num(off_above), num(max_run_min));
+  pushConfig(id);
+  res.json({ id: info.lastInsertRowid });
+});
+
+iotRouter.put('/auto-rules/:id', (req, res) => {
+  const { on_above, off_below, on_below, off_above, max_run_min, sensor, enabled } = req.body ?? {};
   db.prepare(
-    `INSERT INTO automation_rules (key, config, enabled) VALUES (?, ?, ?)
-     ON CONFLICT(key) DO UPDATE SET config=excluded.config, enabled=excluded.enabled`,
-  ).run(req.params.key, JSON.stringify(merged), enabled === undefined ? 1 : enabled ? 1 : 0);
-  pushConfig('greenhouse-01');
+    `UPDATE auto_rules SET sensor=COALESCE(?,sensor), on_above=?, off_below=?, on_below=?, off_above=?,
+       max_run_min=?, enabled=COALESCE(?,enabled) WHERE id=?`,
+  ).run(sensor ?? null, num(on_above), num(off_below), num(on_below), num(off_above), num(max_run_min),
+    enabled === undefined ? null : enabled ? 1 : 0, req.params.id);
+  const row = db.prepare('SELECT device_id FROM auto_rules WHERE id = ?').get(req.params.id) as any;
+  if (row) pushConfig(row.device_id);
   res.json({ ok: true });
 });
+
+iotRouter.delete('/auto-rules/:id', (req, res) => {
+  const row = db.prepare('SELECT device_id FROM auto_rules WHERE id = ?').get(req.params.id) as any;
+  db.prepare('DELETE FROM auto_rules WHERE id = ?').run(req.params.id);
+  if (row) pushConfig(row.device_id);
+  res.json({ ok: true });
+});
+
+const num = (v: any) => (v === undefined || v === null || v === '' || isNaN(Number(v)) ? null : Number(v));

@@ -1,14 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRef } from 'react';
-import { ChevronLeft, Server, LogOut, Sparkles, Send, Bot, Cpu, UploadCloud } from 'lucide-react';
+import { ChevronLeft, Server, LogOut, Sparkles, Send, Bot, Cpu, UploadCloud, Layers, ChevronRight } from 'lucide-react';
 import { api, getBaseUrl, setBaseUrl } from '../lib/api';
-import { useAuth } from '../App';
+import { useAuth, useProject } from '../App';
 import { Card, Field, Spinner } from '../components/ui';
 
 export default function Settings() {
   const nav = useNavigate();
   const { logout } = useAuth();
+  const { current } = useProject();
   const [url, setUrl] = useState(getBaseUrl());
   const [saved, setSaved] = useState(false);
   const [ai, setAi] = useState<boolean | null>(null);
@@ -25,6 +26,15 @@ export default function Settings() {
       </header>
 
       <div className="px-4 space-y-4">
+        <button className="w-full" onClick={() => nav('/projects')}>
+          <Card className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-leaf-50 text-leaf-600 flex items-center justify-center"><Layers size={20} /></div>
+            <div className="flex-1 text-left"><p className="font-medium text-sm">Projects</p>
+              <p className="text-xs text-gray-400 truncate">Current: {current?.name ?? '—'}</p></div>
+            <ChevronRight size={18} className="text-gray-300" />
+          </Card>
+        </button>
+
         <Assistant />
 
         <Card>
@@ -41,7 +51,7 @@ export default function Settings() {
           <span className={`chip ${ai ? 'bg-leaf-50 text-leaf-700' : 'bg-gray-100 text-gray-400'}`}>{ai ? 'On' : 'Off'}</span>
         </Card>
 
-        <FirmwareOta />
+        {current?.has_iot && <FirmwareOta deviceId={current.device_id || 'greenhouse-01'} />}
 
         <button className="btn-danger w-full" onClick={() => { logout(); nav('/'); }}><LogOut size={18} /> Sign out</button>
 
@@ -51,7 +61,7 @@ export default function Settings() {
   );
 }
 
-function FirmwareOta() {
+function FirmwareOta({ deviceId }: { deviceId: string }) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
@@ -63,7 +73,7 @@ function FirmwareOta() {
     try {
       const fd = new FormData();
       fd.append('firmware', f);
-      const r = await api.form<{ ok: boolean; online: boolean; size: number }>('/api/devices/greenhouse-01/ota', fd);
+      const r = await api.form<{ ok: boolean; online: boolean; size: number }>(`/api/devices/${deviceId}/ota`, fd);
       setMsg({
         ok: true,
         text: r.online

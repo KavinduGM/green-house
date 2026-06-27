@@ -6,6 +6,7 @@ import { db, now } from '../db.js';
 import { config, hasClaude } from '../config.js';
 import { parseDiagram } from '../services/claude.js';
 import { materializeProgram } from '../services/fertilizer.js';
+import { projectId } from '../project.js';
 import type { PlantingRow } from '../services/growth.js';
 
 export const gardenRouter = Router();
@@ -19,15 +20,15 @@ gardenRouter.get('/plant-types', (_req, res) => {
 });
 
 // ---- greenhouse + grow bags ----
-gardenRouter.get('/grow-bags', (_req, res) => {
-  res.json(db.prepare('SELECT * FROM grow_bags ORDER BY CAST(label AS INTEGER), label').all());
+gardenRouter.get('/grow-bags', (req, res) => {
+  res.json(db.prepare('SELECT * FROM grow_bags WHERE project_id = ? ORDER BY CAST(label AS INTEGER), label').all(projectId(req)));
 });
 
 gardenRouter.post('/grow-bags', (req, res) => {
   const { label, x = 0.5, y = 0.5 } = req.body ?? {};
   const info = db
-    .prepare('INSERT INTO grow_bags (label, x, y, created_at) VALUES (?, ?, ?, ?)')
-    .run(String(label), Number(x), Number(y), now());
+    .prepare('INSERT INTO grow_bags (label, x, y, project_id, created_at) VALUES (?, ?, ?, ?, ?)')
+    .run(String(label), Number(x), Number(y), projectId(req), now());
   res.json({ id: info.lastInsertRowid });
 });
 
@@ -57,16 +58,17 @@ gardenRouter.post('/diagram', upload.single('image'), async (req, res) => {
       : req.file.mimetype === 'image/webp' ? 'image/webp' : 'image/jpeg';
     const parsed = await parseDiagram(req.file.buffer.toString('base64'), media);
 
+    const pid = projectId(req);
     const info = db
-      .prepare('INSERT INTO diagrams (image_path, parsed_json, created_at) VALUES (?, ?, ?)')
-      .run(filename, JSON.stringify(parsed), now());
+      .prepare('INSERT INTO diagrams (image_path, parsed_json, project_id, created_at) VALUES (?, ?, ?, ?)')
+      .run(filename, JSON.stringify(parsed), pid, now());
 
     // Optionally replace the bag layout with the parsed result
     const replace = req.query.replace === 'true' || req.body?.replace === 'true';
     if (replace) {
-      db.prepare('DELETE FROM grow_bags').run();
-      const ins = db.prepare('INSERT INTO grow_bags (label, x, y, created_at) VALUES (?, ?, ?, ?)');
-      for (const b of parsed.bags) ins.run(b.label, b.x, b.y, now());
+      db.prepare('DELETE FROM grow_bags WHERE project_id = ?').run(pid);
+      const ins = db.prepare('INSERT INTO grow_bags (label, x, y, project_id, created_at) VALUES (?, ?, ?, ?, ?)');
+      for (const b of parsed.bags) ins.run(b.label, b.x, b.y, pid, now());
     }
 
     res.json({ diagramId: info.lastInsertRowid, image: `/uploads/${filename}`, parsed, applied: replace });
@@ -79,21 +81,23 @@ gardenRouter.post('/diagram/:id/apply', (req, res) => {
   const row = db.prepare('SELECT parsed_json FROM diagrams WHERE id = ?').get(req.params.id) as any;
   if (!row) return res.status(404).json({ error: 'not found' });
   const parsed = JSON.parse(row.parsed_json);
-  db.prepare('DELETE FROM grow_bags').run();
-  const ins = db.prepare('INSERT INTO grow_bags (label, x, y, created_at) VALUES (?, ?, ?, ?)');
-  for (const b of parsed.bags) ins.run(b.label, b.x, b.y, now());
+  const pid = projectId(req);
+  db.prepare('DELETE FROM grow_bags WHERE project_id = ?').run(pid);
+  const ins = db.prepare('INSERT INTO grow_bags (label, x, y, project_id, created_at) VALUES (?, ?, ?, ?, ?)');
+  for (const b of parsed.bags) ins.run(b.label, b.x, b.y, pid, now());
   res.json({ ok: true, bags: parsed.bags.length });
 });
 
 // ---- plantings (bulk-friendly) ----
-gardenRouter.get('/plantings', (_req, res) => {
+gardenRouter.get('/plantings', (req, res) => {
   const rows = db
     .prepare(
       `SELECT p.*, pt.sinhala, pt.english, pt.form, pt.category
        FROM plantings p JOIN plant_types pt ON pt.key = p.plant_type_key
+       WHERE p.project_id = ?
        ORDER BY p.planted_date DESC`,
     )
-    .all() as any[];
+    .all(projectId(req)) as any[];
   const bagStmt = db.prepare(
     'SELECT gb.id, gb.label FROM planting_bags pb JOIN grow_bags gb ON gb.id = pb.grow_bag_id WHERE pb.planting_id = ?',
   );
@@ -126,8 +130,8 @@ gardenRouter.post('/plantings', (req, res) => {
 
   const tx = db.transaction(() => {
     const info = db
-      .prepare('INSERT INTO plantings (plant_type_key, name, planted_date, count, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(plant_type_key, name || type.english, planted_date, cnt, notes ?? null, now());
+      .prepare('INSERT INTO plantings (plant_type_key, name, planted_date, count, notes, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(plant_type_key, name || type.english, planted_date, cnt, notes ?? null, projectId(req), now());
     const pid = Number(info.lastInsertRowid);
     const link = db.prepare('INSERT OR IGNORE INTO planting_bags (planting_id, grow_bag_id) VALUES (?, ?)');
     for (const b of ids) link.run(pid, b);

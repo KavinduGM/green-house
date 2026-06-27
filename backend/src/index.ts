@@ -4,6 +4,7 @@ import http from 'node:http';
 import { config, hasClaude } from './config.js';
 import { db, seed } from './db.js';
 import { requireAuth } from './auth.js';
+import { resolveProject } from './project.js';
 import { startMqtt } from './mqtt.js';
 import { attachRealtime } from './realtime.js';
 import { startScheduler } from './services/scheduler.js';
@@ -14,6 +15,7 @@ import { trackingRouter } from './routes/tracking.js';
 import { iotRouter } from './routes/iot.js';
 import { aiRouter } from './routes/ai.js';
 import { dashboardRouter } from './routes/dashboard.js';
+import { projectsRouter } from './routes/projects.js';
 
 seed();
 
@@ -33,8 +35,10 @@ app.get('/api/health', (_req, res) =>
 // public
 app.use('/api/auth', authRouter);
 
-// everything else requires a token
+// everything else requires a token + a resolved project (X-Project-Id header)
 app.use('/api', requireAuth);
+app.use('/api', resolveProject);
+app.use('/api', projectsRouter);
 app.use('/api', gardenRouter);
 app.use('/api', trackingRouter);
 app.use('/api', iotRouter);

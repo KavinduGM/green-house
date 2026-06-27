@@ -153,6 +153,49 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 `);
 
+// ---------- Multi-project support ----------
+db.exec(`
+CREATE TABLE IF NOT EXISTS projects (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  location_name TEXT,
+  latitude REAL,
+  longitude REAL,
+  environment TEXT NOT NULL DEFAULT 'indoor',   -- indoor | outdoor | mixed
+  has_iot INTEGER NOT NULL DEFAULT 1,           -- smart features on/off
+  device_id TEXT,                               -- linked controller (smart projects)
+  notes TEXT,
+  created_at TEXT NOT NULL
+);
+`);
+
+// Scope existing tables to a project (idempotent — ignore "duplicate column").
+for (const t of ['grow_bags', 'plantings', 'diagrams']) {
+  try { db.exec(`ALTER TABLE ${t} ADD COLUMN project_id INTEGER NOT NULL DEFAULT 1`); } catch { /* already added */ }
+}
+
+// ---------- Dynamic actuators (custom relay buttons) ----------
+for (const [col, def] of [
+  ['name', 'TEXT'], ['pin', 'INTEGER'], ['active_low', 'INTEGER NOT NULL DEFAULT 1'],
+  ['safety_cap_min', 'INTEGER'], ['sort', 'INTEGER NOT NULL DEFAULT 0'], ['is_default', 'INTEGER NOT NULL DEFAULT 0'],
+] as const) {
+  try { db.exec(`ALTER TABLE actuators ADD COLUMN ${col} ${def}`); } catch { /* already added */ }
+}
+
+// Generic automation rules — any actuator driven by any sensor + thresholds.
+db.exec(`
+CREATE TABLE IF NOT EXISTS auto_rules (
+  id INTEGER PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  actuator_key TEXT NOT NULL,
+  sensor TEXT NOT NULL,            -- temperature | humidity | soil_moisture
+  on_above REAL, off_below REAL,   -- venting/cooling style (turn ON when high)
+  on_below REAL, off_above REAL,   -- irrigation/heating style (turn ON when low)
+  max_run_min INTEGER,
+  enabled INTEGER NOT NULL DEFAULT 1
+);
+`);
+
 // ---------- Seeding ----------
 export function seed() {
   // single user — keep email + password in sync with APP_EMAIL / APP_PASSWORD
@@ -175,6 +218,17 @@ export function seed() {
     db.prepare("INSERT INTO greenhouses (id, name) VALUES (1, 'My Greenhouse')").run();
   }
 
+  // default project (id 1) — existing data belongs to it
+  if ((db.prepare('SELECT COUNT(*) c FROM projects').get() as any).c === 0) {
+    db.prepare(
+      `INSERT INTO projects (id, name, environment, has_iot, device_id, created_at)
+       VALUES (1, 'My Greenhouse', 'indoor', 1, 'greenhouse-01', ?)`,
+    ).run(now());
+  }
+  for (const t of ['grow_bags', 'plantings', 'diagrams']) {
+    db.prepare(`UPDATE ${t} SET project_id = 1 WHERE project_id IS NULL`).run();
+  }
+
   // plant types (upsert from catalog, preserves user edits to model only on first insert)
   const upsert = db.prepare(`
     INSERT INTO plant_types (key, sinhala, english, category, form, model)
@@ -185,25 +239,33 @@ export function seed() {
     upsert.run({ ...p, model: JSON.stringify(p) });
   }
 
-  // default automation rules
-  const defaults: Record<string, object> = {
-    fan_temp: { onAbove: 32, offBelow: 29, hysteresis: true },
-    fan_humidity: { onAbove: 85, offBelow: 75 },
-    pump_soil: { onBelow: 35, offAbove: 60, maxRunMin: 15 }, // soil moisture %
-  };
-  const insertRule = db.prepare(
-    'INSERT OR IGNORE INTO automation_rules (key, config, enabled) VALUES (?, ?, 1)',
-  );
-  for (const [k, v] of Object.entries(defaults)) insertRule.run(k, JSON.stringify(v));
-
   // a default device row so the UI shows the controller even before it connects
   db.prepare(
     "INSERT OR IGNORE INTO devices (device_id, name, online) VALUES ('greenhouse-01', 'Greenhouse Controller', 0)",
   ).run();
-  for (const key of ['pump', 'light', 'fan']) {
+  const defaults = [
+    { key: 'pump', name: 'Water Pump', pin: 26, sort: 0, cap: 30 },
+    { key: 'light', name: 'Grow Light', pin: 27, sort: 1, cap: null },
+    { key: 'fan', name: 'Blower Fan', pin: 25, sort: 2, cap: null },
+  ];
+  for (const a of defaults) {
     db.prepare(
-      'INSERT OR IGNORE INTO actuators (device_id, key, state, mode) VALUES (?, ?, 0, ?)',
-    ).run('greenhouse-01', key, 'manual');
+      `INSERT OR IGNORE INTO actuators (device_id, key, state, mode, name, pin, active_low, safety_cap_min, sort, is_default)
+       VALUES (?, ?, 0, 'manual', ?, ?, 1, ?, ?, 1)`,
+    ).run('greenhouse-01', a.key, a.name, a.pin, a.cap, a.sort);
+    // backfill older rows that pre-date these columns
+    db.prepare('UPDATE actuators SET name = COALESCE(name, ?), pin = COALESCE(pin, ?), is_default = 1 WHERE device_id = ? AND key = ?')
+      .run(a.name, a.pin, 'greenhouse-01', a.key);
+  }
+
+  // default automation rules (generic engine)
+  if ((db.prepare('SELECT COUNT(*) c FROM auto_rules').get() as any).c === 0) {
+    const ins = db.prepare(
+      'INSERT INTO auto_rules (device_id, actuator_key, sensor, on_above, off_below, on_below, off_above, max_run_min, enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1)',
+    );
+    ins.run('greenhouse-01', 'fan', 'temperature', 32, 29, null, null, null);
+    ins.run('greenhouse-01', 'fan', 'humidity', 85, 75, null, null, null);
+    ins.run('greenhouse-01', 'pump', 'soil_moisture', null, null, 35, 60, 15);
   }
 }
 

@@ -3,6 +3,7 @@
    Lets you explore every screen and even add/log/toggle things (kept in memory
    until the app restarts). Activated from the login screen.
 --------------------------------------------------------------------------- */
+import { getProjectId } from './api';
 
 const DAY = 86_400_000;
 const today = () => new Date().toISOString().slice(0, 10);
@@ -73,22 +74,41 @@ const events: Record<number, any[]> = {
   3: [],
 };
 
-let actuators: Record<string, { state: boolean; mode: string }> = {
-  pump: { state: false, mode: 'schedule' },
-  light: { state: false, mode: 'manual' },
-  fan: { state: true, mode: 'auto' },
-};
+let demoActuators: any[] = [
+  { key: 'pump', name: 'Water Pump', pin: 26, active_low: true, is_default: true, safety_cap_min: 30, state: false, mode: 'schedule' },
+  { key: 'light', name: 'Grow Light', pin: 27, active_low: true, is_default: true, safety_cap_min: null, state: false, mode: 'manual' },
+  { key: 'fan', name: 'Blower Fan', pin: 25, active_low: true, is_default: true, safety_cap_min: null, state: true, mode: 'auto' },
+];
 let schedules = [
   { id: id(), device_id: 'demo', actuator_key: 'pump', days_mask: 127, on_time: '06:30', duration_min: 15, enabled: 1 },
   { id: id(), device_id: 'demo', actuator_key: 'pump', days_mask: 127, on_time: '17:30', duration_min: 15, enabled: 1 },
   { id: id(), device_id: 'demo', actuator_key: 'light', days_mask: 127, on_time: '18:00', duration_min: 240, enabled: 1 },
 ];
-const rules = [
-  { key: 'fan_temp', enabled: true, config: { onAbove: 32, offBelow: 29 } },
-  { key: 'fan_humidity', enabled: true, config: { onAbove: 85, offBelow: 75 } },
-  { key: 'pump_soil', enabled: true, config: { onBelow: 35, offAbove: 60, maxRunMin: 15 } },
+let demoRules: any[] = [
+  { id: id(), device_id: 'demo', actuator_key: 'fan', sensor: 'temperature', on_above: 32, off_below: 29, on_below: null, off_above: null, max_run_min: null, enabled: true },
+  { id: id(), device_id: 'demo', actuator_key: 'pump', sensor: 'soil_moisture', on_above: null, off_below: null, on_below: 35, off_above: 60, max_run_min: 15, enabled: true },
 ];
 const sensor = { temperature: 29.4, humidity: 72, soil_moisture: 48 };
+
+// ---- demo projects + weather ----
+let demoProjects: any[] = [
+  { id: 1, name: 'Home Greenhouse', environment: 'indoor', has_iot: true, device_id: 'demo', location_name: 'Colombo, Sri Lanka', latitude: 6.93, longitude: 79.85 },
+  { id: 2, name: 'Backyard Field', environment: 'outdoor', has_iot: false, device_id: null, location_name: 'Kandy, Sri Lanka', latitude: 7.29, longitude: 80.64 },
+];
+const currentProject = () => demoProjects.find((p) => p.id === (getProjectId() ?? 1)) ?? demoProjects[0];
+
+function demoWeather(name?: string) {
+  const days = Array.from({ length: 5 }, (_, i) => dayStr(Date.now() + i * DAY));
+  return {
+    location: name ?? 'Colombo, Sri Lanka',
+    current: { temperature_2m: 29.3, relative_humidity_2m: 74, apparent_temperature: 33.1, precipitation: 0.2, weather_code: 2, wind_speed_10m: 11, is_day: 1 },
+    daily: {
+      time: days, weather_code: [2, 3, 61, 80, 1],
+      temperature_2m_max: [31, 30, 29, 30, 32], temperature_2m_min: [25, 25, 24, 25, 26],
+      precipitation_probability_max: [20, 40, 80, 60, 10],
+    },
+  };
+}
 
 // ---------------- computations ----------------
 const predictHeight = (m: DemoModel, day: number) =>
@@ -176,7 +196,9 @@ const plantingOut = (p: DemoPlanting) => {
 };
 
 function dashboard() {
-  const acts = Object.entries(actuators).map(([key, a]) => ({ key, state: a.state, mode: a.mode }));
+  const project = currentProject();
+  const smart = !!project.has_iot;
+  const acts = demoActuators;
   const upcoming: any[] = [];
   for (const p of plantings.filter((x) => x.status === 'active')) {
     for (const ms of timeline(p).milestones) {
@@ -186,10 +208,13 @@ function dashboard() {
   }
   upcoming.sort((a, b) => a.in_days - b.in_days);
   return {
+    project,
     counts: { activePlantings: plantings.filter((p) => p.status === 'active').length,
       totalPlants: plantings.filter((p) => p.status === 'active').reduce((a, p) => a + p.count, 0), bags: bags.length },
-    device: { device_id: 'demo', name: 'Greenhouse Controller', online: true, fw: 'fw-1.0.0 (demo)', actuators: acts },
-    latestSensors: { ts: iso(Date.now()), ...sensor }, actuators: acts,
+    device: smart ? { device_id: 'demo', name: 'Greenhouse Controller', online: true, fw: 'fw-1.1.0 (demo)', actuators: acts } : null,
+    latestSensors: smart ? { ts: iso(Date.now()), ...sensor } : null,
+    actuators: smart ? acts : [],
+    weather: project.latitude != null ? demoWeather(project.location_name) : null,
     dueFertilizer: dueFertilizer(), upcomingMilestones: upcoming.slice(0, 8),
   };
 }
@@ -227,6 +252,29 @@ export async function demoRequest<T>(method: string, path: string, body?: unknow
   if (path === '/api/auth/login') return { token: 'demo', email: 'demo@greenhouse' } as T;
   if (path === '/api/ai/status') return { enabled: true } as T;
   if (path === '/api/dashboard') return dashboard() as T;
+
+  // ---- projects + weather + geocode ----
+  if (path === '/api/projects' && method === 'GET') return demoProjects as T;
+  if (path === '/api/projects' && method === 'POST') {
+    const b: any = body;
+    const np = { id: id(), name: b.name, environment: b.environment ?? 'indoor', has_iot: !!b.has_iot,
+      device_id: b.has_iot ? (b.device_id || 'demo') : null, location_name: b.location_name ?? null,
+      latitude: b.latitude ?? null, longitude: b.longitude ?? null };
+    demoProjects.push(np); return { id: np.id } as T;
+  }
+  if ((mm = m(/^\/api\/projects\/(\d+)$/))) {
+    const pid = +mm[1]; const p = demoProjects.find((x) => x.id === pid);
+    if (method === 'PUT') { const b: any = body; if (p) Object.assign(p, { name: b.name ?? p.name, environment: b.environment ?? p.environment, has_iot: b.has_iot ?? p.has_iot, location_name: b.location_name ?? p.location_name, latitude: b.latitude ?? p.latitude, longitude: b.longitude ?? p.longitude }); return { ok: true } as T; }
+    if (method === 'DELETE') { demoProjects = demoProjects.filter((x) => x.id !== pid); return { ok: true } as T; }
+  }
+  if ((mm = m(/^\/api\/projects\/(\d+)\/weather$/))) {
+    const p = demoProjects.find((x) => x.id === +mm![1]); return demoWeather(p?.location_name) as T;
+  }
+  if (path.startsWith('/api/geocode')) return [
+    { name: 'Colombo', admin1: 'Western', country: 'Sri Lanka', latitude: 6.93, longitude: 79.85, label: 'Colombo, Western, Sri Lanka' },
+    { name: 'Kandy', admin1: 'Central', country: 'Sri Lanka', latitude: 7.29, longitude: 80.64, label: 'Kandy, Central, Sri Lanka' },
+    { name: 'Galle', admin1: 'Southern', country: 'Sri Lanka', latitude: 6.03, longitude: 80.22, label: 'Galle, Southern, Sri Lanka' },
+  ] as T;
   if (path === '/api/plant-types') return CATALOG.map((c) => ({ key: c.key, sinhala: c.sinhala, english: c.english, category: c.category, form: c.form, model: c })) as T;
   if (path === '/api/grow-bags' && method === 'GET') return bags as T;
   if (path === '/api/grow-bags' && method === 'POST') { const b: any = body; const nb = { id: id(), label: String(b.label), x: b.x ?? 0.5, y: b.y ?? 0.5 }; bags.push(nb); return { id: nb.id } as T; }
@@ -292,23 +340,42 @@ export async function demoRequest<T>(method: string, path: string, body?: unknow
   if ((mm = m(/^\/api\/fertilizer\/(\d+)\/(apply|skip)$/))) return { ok: true } as T;
   if (path === '/api/fertilizer/due') return dueFertilizer() as T;
 
-  if (path === '/api/devices') return [{ device_id: 'demo', name: 'Greenhouse Controller', online: true, fw: 'fw-1.0.0 (demo)',
-    actuators: Object.entries(actuators).map(([key, a]) => ({ key, state: a.state, mode: a.mode })) }] as T;
+  if (path === '/api/devices') return [{ device_id: 'demo', name: 'Greenhouse Controller', online: true, fw: 'fw-1.2.0 (demo)',
+    actuators: demoActuators }] as T;
   if ((mm = m(/^\/api\/devices\/[^/]+\/sensors\/latest$/))) return { ts: iso(Date.now()), ...sensor } as T;
   if ((mm = m(/^\/api\/devices\/[^/]+\/sensors\/history$/))) {
     const out = []; for (let h = 24; h >= 0; h--) out.push({ ts: iso(Date.now() - h * 3_600_000),
       temperature: 27 + 5 * Math.sin(h / 3.8) + (h % 3), humidity: 70 + 12 * Math.cos(h / 4), soil_moisture: 55 - (h % 6) * 2 });
     return out as T;
   }
-  if ((mm = m(/^\/api\/devices\/[^/]+\/actuators\/(pump|light|fan)$/))) { const b: any = body; actuators[mm[1]].state = b.action === 'on'; return { ok: true } as T; }
-  if ((mm = m(/^\/api\/devices\/[^/]+\/actuators\/(pump|light|fan)\/mode$/))) { const b: any = body; actuators[mm[1]].mode = b.mode; return { ok: true } as T; }
+  if (path.match(/^\/api\/devices\/[^/]+\/actuators$/) && method === 'POST') {
+    const b: any = body; const key = String(b.name).toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'relay';
+    demoActuators.push({ key, name: b.name, pin: b.pin, active_low: b.active_low ?? true, is_default: false, safety_cap_min: b.safety_cap_min ?? null, state: false, mode: 'manual' });
+    return { ok: true, key } as T;
+  }
+  if ((mm = m(/^\/api\/devices\/[^/]+\/actuators\/([^/]+)\/def$/))) {
+    const a = demoActuators.find((x) => x.key === mm![1]); const b: any = body;
+    if (a) Object.assign(a, { name: b.name ?? a.name, pin: b.pin ?? a.pin, active_low: b.active_low ?? a.active_low, safety_cap_min: b.safety_cap_min ?? null });
+    return { ok: true } as T;
+  }
+  if ((mm = m(/^\/api\/devices\/[^/]+\/actuators\/([^/]+)\/mode$/))) { const a = demoActuators.find((x) => x.key === mm![1]); const b: any = body; if (a) a.mode = b.mode; return { ok: true } as T; }
+  if ((mm = m(/^\/api\/devices\/[^/]+\/actuators\/([^/]+)$/)) && method === 'POST') { const a = demoActuators.find((x) => x.key === mm![1]); const b: any = body; if (a) a.state = b.action === 'on'; return { ok: true } as T; }
+  if ((mm = m(/^\/api\/devices\/[^/]+\/actuators\/([^/]+)$/)) && method === 'DELETE') { demoActuators = demoActuators.filter((x) => x.key !== mm![1]); demoRules = demoRules.filter((r) => r.actuator_key !== mm![1]); return { ok: true } as T; }
+
+  // auto-rules
+  if ((mm = m(/^\/api\/devices\/[^/]+\/auto-rules$/)) && method === 'GET') return demoRules as T;
+  if ((mm = m(/^\/api\/devices\/[^/]+\/auto-rules$/)) && method === 'POST') {
+    const b: any = body;
+    demoRules.push({ id: id(), device_id: 'demo', actuator_key: b.actuator_key, sensor: b.sensor, on_above: b.on_above ?? null, off_below: b.off_below ?? null, on_below: b.on_below ?? null, off_above: b.off_above ?? null, max_run_min: b.max_run_min ?? null, enabled: true });
+    return { id: nextId } as T;
+  }
+  if ((mm = m(/^\/api\/auto-rules\/(\d+)$/)) && method === 'PUT') { const r = demoRules.find((x) => x.id === +mm![1]); const b: any = body; if (r && b.enabled !== undefined) r.enabled = b.enabled; return { ok: true } as T; }
+  if ((mm = m(/^\/api\/auto-rules\/(\d+)$/)) && method === 'DELETE') { demoRules = demoRules.filter((x) => x.id !== +mm![1]); return { ok: true } as T; }
 
   if (path === '/api/schedules' && method === 'GET') return schedules as T;
   if (path === '/api/schedules' && method === 'POST') { const b: any = body; const ns = { id: id(), device_id: 'demo', actuator_key: b.actuator_key, days_mask: b.days_mask ?? 127, on_time: b.on_time, duration_min: b.duration_min ?? 15, enabled: 1 }; schedules.push(ns); return { id: ns.id } as T; }
   if ((mm = m(/^\/api\/schedules\/(\d+)$/))) { if (method === 'DELETE') schedules = schedules.filter((s) => s.id !== +mm![1]); return { ok: true } as T; }
 
-  if (path === '/api/automation-rules') return rules as T;
-  if ((mm = m(/^\/api\/automation-rules\/([^/]+)$/))) { const r = rules.find((x) => x.key === mm![1]); const b: any = body; if (r) { Object.assign(r.config, b.config ?? {}); if (b.enabled !== undefined) r.enabled = b.enabled; } return { ok: true } as T; }
 
   if (path === '/api/ai/ask') return { answer: "🌿 Demo assistant: connect the backend with your Claude key for real answers. Tip: for tomatoes, prune side-shoots weekly and feed Grow More K44 once flowers appear for better fruit set." } as T;
 

@@ -74,13 +74,11 @@ function ingestSensors(deviceId: string, p: any) {
 }
 
 function ingestState(deviceId: string, p: any) {
-  for (const key of ['pump', 'light', 'fan']) {
-    if (p[key] !== undefined) {
-      db.prepare(
-        `INSERT INTO actuators (device_id, key, state, mode, updated_at) VALUES (?, ?, ?, COALESCE((SELECT mode FROM actuators WHERE device_id=? AND key=?),'manual'), ?)
-         ON CONFLICT(device_id, key) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
-      ).run(deviceId, key, p[key] ? 1 : 0, deviceId, key, now());
-    }
+  // The device reports state for every actuator by key — update whichever exist.
+  const known = new Set((db.prepare('SELECT key FROM actuators WHERE device_id = ?').all(deviceId) as any[]).map((r) => r.key));
+  const upd = db.prepare('UPDATE actuators SET state = ?, updated_at = ? WHERE device_id = ? AND key = ?');
+  for (const key of Object.keys(p)) {
+    if (known.has(key)) upd.run(p[key] ? 1 : 0, now(), deviceId, key);
   }
   emit({ type: 'state', deviceId, data: p });
 }
@@ -98,14 +96,18 @@ export function sendOta(deviceId: string, url: string) {
 }
 
 export function pushConfig(deviceId: string) {
-  const rules = db.prepare('SELECT key, config, enabled FROM automation_rules').all() as any[];
-  const schedules = db.prepare('SELECT * FROM schedules WHERE device_id = ? AND enabled = 1').all(deviceId);
-  const modes = db.prepare('SELECT key, mode, state FROM actuators WHERE device_id = ?').all(deviceId);
-  const payload = {
-    rules: Object.fromEntries(rules.map((r) => [r.key, { ...JSON.parse(r.config), enabled: !!r.enabled }])),
-    schedules,
-    modes,
-  };
+  // Dynamic actuator pin map — the firmware drives exactly these pins/keys.
+  const actuators = (db
+    .prepare('SELECT key, pin, active_low, mode, safety_cap_min FROM actuators WHERE device_id = ? AND pin IS NOT NULL ORDER BY sort, key')
+    .all(deviceId) as any[])
+    .map((a) => ({ key: a.key, pin: a.pin, active_low: !!a.active_low, mode: a.mode, safety_cap_min: a.safety_cap_min ?? 0 }));
+
+  // Generic automation rules (any actuator, any sensor, thresholds).
+  const autorules = db
+    .prepare('SELECT actuator_key, sensor, on_above, off_below, on_below, off_above, max_run_min FROM auto_rules WHERE device_id = ? AND enabled = 1')
+    .all(deviceId);
+
+  const payload = { actuators, autorules };
   aedes.publish({ topic: `gh/${deviceId}/dn/config`, payload: Buffer.from(JSON.stringify(payload)), qos: 1, retain: true, cmd: 'publish', dup: false } as any, () => {});
 }
 
