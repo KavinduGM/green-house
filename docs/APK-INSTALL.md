@@ -11,7 +11,7 @@ The file is **`dist/PlantPulse-v1.0.apk`**.
 1. Tap the `.apk` file (in Files / Downloads).
 2. Android will ask to allow installing from this source → **Allow / Settings → enable**,
    then go back and tap **Install**.
-3. Open **Greenhouse**.
+3. Open **PlantPulse**.
 
 ## First run
 1. **Server URL** — your VPS address, e.g. `http://203.0.113.10:8080`
