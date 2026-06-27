@@ -33,7 +33,9 @@ const CATALOG: DemoModel[] = [
   { key:'pathola', sinhala:'Pathola', english:'Snake Gourd', category:'gourd', form:'vine', germinateDay:6, floweringDay:45, firstHarvestDay:65, maturityDay:80, maxHeightCm:250, spreadCm:60, growthK:0.12, growthMidpoint:36, leafColor:'#3a7d44', fruitColor:'#8fae55', notes:'Train on overhead net.' },
   { key:'vatakolu', sinhala:'Vatakolu', english:'Ridge Gourd', category:'gourd', form:'vine', germinateDay:6, floweringDay:45, firstHarvestDay:62, maturityDay:80, maxHeightCm:250, spreadCm:60, growthK:0.12, growthMidpoint:35, leafColor:'#3a7d44', fruitColor:'#6f9a45', notes:'Train overhead; pick young.' },
 ];
-const model = (k: string) => CATALOG.find((c) => c.key === k)!;
+let demoCustomTypes: DemoModel[] = [];
+const allTypes = () => [...CATALOG, ...demoCustomTypes];
+const model = (k: string) => allTypes().find((c) => c.key === k) ?? CATALOG[0];
 
 // ---------------- in-memory state ----------------
 let nextId = 100;
@@ -275,7 +277,21 @@ export async function demoRequest<T>(method: string, path: string, body?: unknow
     { name: 'Kandy', admin1: 'Central', country: 'Sri Lanka', latitude: 7.29, longitude: 80.64, label: 'Kandy, Central, Sri Lanka' },
     { name: 'Galle', admin1: 'Southern', country: 'Sri Lanka', latitude: 6.03, longitude: 80.22, label: 'Galle, Southern, Sri Lanka' },
   ] as T;
-  if (path === '/api/plant-types') return CATALOG.map((c) => ({ key: c.key, sinhala: c.sinhala, english: c.english, category: c.category, form: c.form, model: c })) as T;
+  if (path === '/api/plant-types' && method === 'GET') return allTypes().map((c) => ({ key: c.key, sinhala: c.sinhala, english: c.english, category: c.category, form: c.form, model: c, is_custom: demoCustomTypes.includes(c) })) as T;
+  if (path === '/api/plant-types' && method === 'POST') {
+    const b: any = body;
+    const english = (b.english || b.sinhala || 'Crop').trim();
+    let key = english.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '') || 'crop';
+    while (allTypes().some((c) => c.key === key)) key += '_2';
+    const nv = (v: any, d: number) => (v == null || v === '' || isNaN(Number(v)) ? d : Number(v));
+    const fly = nv(b.floweringDay, 40);
+    const t: DemoModel = { key, sinhala: (b.sinhala || english).trim(), english, category: b.category || 'fruiting', form: b.form || 'bush',
+      germinateDay: nv(b.germinateDay, 7), floweringDay: fly, firstHarvestDay: nv(b.firstHarvestDay, 70), maturityDay: nv(b.maturityDay, 90),
+      maxHeightCm: nv(b.maxHeightCm, 80), spreadCm: Math.round(nv(b.maxHeightCm, 80) * 0.6), growthK: 0.1, growthMidpoint: fly,
+      leafColor: '#3f8a4e', fruitColor: '#d23b27', notes: '' };
+    demoCustomTypes.push(t); return { key, model: t } as T;
+  }
+  if ((mm = m(/^\/api\/plant-types\/([^/]+)$/)) && method === 'DELETE') { demoCustomTypes = demoCustomTypes.filter((c) => c.key !== mm![1]); return { ok: true } as T; }
   if (path === '/api/grow-bags' && method === 'GET') return bags as T;
   if (path === '/api/grow-bags' && method === 'POST') { const b: any = body; const nb = { id: id(), label: String(b.label), x: b.x ?? 0.5, y: b.y ?? 0.5 }; bags.push(nb); return { id: nb.id } as T; }
   if ((mm = m(/^\/api\/grow-bags\/(\d+)$/))) { if (method === 'DELETE') bags = bags.filter((b) => b.id !== +mm![1]); return { ok: true } as T; }
@@ -297,6 +313,12 @@ export async function demoRequest<T>(method: string, path: string, body?: unknow
     plantings.unshift({ id: nid, plant_type_key: b.plant_type_key, name: b.name || model(b.plant_type_key).english,
       planted_date: b.planted_date, count: b.count || (b.bag_ids?.length ?? 1), status: 'active', notes: b.notes, bagIds: b.bag_ids ?? [] });
     measurements[nid] = []; events[nid] = [];
+    if (b.initial_height) {
+      const mdl = model(b.plant_type_key);
+      const day = Math.floor((Date.now() - Date.parse(b.planted_date)) / DAY);
+      measurements[nid].push({ id: id(), planting_id: nid, date: today(), metric: 'height_cm', value: Number(b.initial_height), predicted: predictHeight(mdl, day) });
+    }
+    if (b.last_fertilizer_date) events[nid].push({ id: id(), planting_id: nid, type: 'fertilize', date: b.last_fertilizer_date, product: 'Last feed before tracking', notes: 'Existing plant' });
     return { id: nid } as T;
   }
   if ((mm = m(/^\/api\/plantings\/(\d+)$/))) {

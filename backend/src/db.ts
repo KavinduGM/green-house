@@ -182,6 +182,9 @@ for (const [col, def] of [
   try { db.exec(`ALTER TABLE actuators ADD COLUMN ${col} ${def}`); } catch { /* already added */ }
 }
 
+// Custom crops the grower adds (beyond the built-in catalog).
+try { db.exec('ALTER TABLE plant_types ADD COLUMN is_custom INTEGER NOT NULL DEFAULT 0'); } catch { /* already added */ }
+
 // Generic automation rules — any actuator driven by any sensor + thresholds.
 db.exec(`
 CREATE TABLE IF NOT EXISTS auto_rules (

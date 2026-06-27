@@ -7,7 +7,7 @@ import { config, hasClaude } from '../config.js';
 import { parseDiagram } from '../services/claude.js';
 import { materializeProgram } from '../services/fertilizer.js';
 import { projectId } from '../project.js';
-import type { PlantingRow } from '../services/growth.js';
+import { predictedForLog, type PlantingRow } from '../services/growth.js';
 
 export const gardenRouter = Router();
 
@@ -15,8 +15,48 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 12 
 
 // ---- plant catalog ----
 gardenRouter.get('/plant-types', (_req, res) => {
-  const rows = db.prepare('SELECT key, sinhala, english, category, form, model FROM plant_types ORDER BY sinhala').all() as any[];
-  res.json(rows.map((r) => ({ ...r, model: JSON.parse(r.model) })));
+  const rows = db.prepare('SELECT key, sinhala, english, category, form, model, is_custom FROM plant_types ORDER BY is_custom, sinhala').all() as any[];
+  res.json(rows.map((r) => ({ ...r, is_custom: !!r.is_custom, model: JSON.parse(r.model) })));
+});
+
+const cropSlug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').slice(0, 24) || 'crop';
+const fruitColorFor = (cat: string) =>
+  cat === 'leafy' || cat === 'herb' ? '#7fae5a' : cat === 'root' ? '#e8d8c0' : cat === 'gourd' ? '#6f9a45' : '#d23b27';
+
+// add a custom crop type
+gardenRouter.post('/plant-types', (req, res) => {
+  const b = req.body ?? {};
+  const english = (b.english || b.sinhala || '').trim();
+  const sinhala = (b.sinhala || b.english || '').trim();
+  if (!english) return res.status(400).json({ error: 'name required' });
+  let key = cropSlug(english);
+  let n = 2; const base = key;
+  while (db.prepare('SELECT 1 FROM plant_types WHERE key = ?').get(key)) key = `${base}_${n++}`;
+
+  const numv = (v: any, d: number) => (v === undefined || v === null || v === '' || isNaN(Number(v)) ? d : Number(v));
+  const category = ['fruiting', 'leafy', 'herb', 'root', 'gourd', 'tree'].includes(b.category) ? b.category : 'fruiting';
+  const form = ['bush', 'vine', 'herb', 'root', 'tree'].includes(b.form) ? b.form : 'bush';
+  const maxHeightCm = numv(b.maxHeightCm, 80);
+  const floweringDay = numv(b.floweringDay, 40);
+  const model = {
+    key, sinhala, english, category, form,
+    germinateDay: numv(b.germinateDay, 7), floweringDay,
+    firstHarvestDay: numv(b.firstHarvestDay, 70), maturityDay: numv(b.maturityDay, 90),
+    maxHeightCm, spreadCm: numv(b.spreadCm, Math.round(maxHeightCm * 0.6)),
+    growthK: numv(b.growthK, 0.1), growthMidpoint: numv(b.growthMidpoint, floweringDay),
+    leafColor: b.leafColor || '#3f8a4e', fruitColor: b.fruitColor || fruitColorFor(category),
+    notes: b.notes || '',
+  };
+  db.prepare('INSERT INTO plant_types (key, sinhala, english, category, form, model, is_custom) VALUES (?, ?, ?, ?, ?, ?, 1)')
+    .run(key, sinhala, english, category, form, JSON.stringify(model));
+  res.json({ key, model });
+});
+
+gardenRouter.delete('/plant-types/:key', (req, res) => {
+  const inUse = db.prepare('SELECT 1 FROM plantings WHERE plant_type_key = ? LIMIT 1').get(req.params.key);
+  if (inUse) return res.status(400).json({ error: 'Crop is in use by a planting' });
+  db.prepare('DELETE FROM plant_types WHERE key = ? AND is_custom = 1').run(req.params.key);
+  res.json({ ok: true });
 });
 
 // ---- greenhouse + grow bags ----
@@ -118,15 +158,17 @@ gardenRouter.get('/plantings/:id', (req, res) => {
   res.json(r);
 });
 
-// Bulk add: one name + one date applied to many grow bags ("today I planted 10 chilli")
+// Bulk add: one name + one date applied to many grow bags ("today I planted 10 chilli").
+// Onboard existing plants too: pass initial_height (cm now) + last_fertilizer_date.
 gardenRouter.post('/plantings', (req, res) => {
-  const { plant_type_key, name, planted_date, notes, bag_ids = [], count } = req.body ?? {};
+  const { plant_type_key, name, planted_date, notes, bag_ids = [], count, initial_height, last_fertilizer_date } = req.body ?? {};
   if (!plant_type_key || !planted_date) return res.status(400).json({ error: 'plant_type_key and planted_date required' });
   const type = db.prepare('SELECT english FROM plant_types WHERE key = ?').get(plant_type_key) as any;
   if (!type) return res.status(400).json({ error: 'unknown plant type' });
 
   const ids: number[] = Array.isArray(bag_ids) ? bag_ids.map(Number) : [];
   const cnt = Number(count) || ids.length || 1;
+  const today = new Date().toISOString().slice(0, 10);
 
   const tx = db.transaction(() => {
     const info = db
@@ -135,7 +177,28 @@ gardenRouter.post('/plantings', (req, res) => {
     const pid = Number(info.lastInsertRowid);
     const link = db.prepare('INSERT OR IGNORE INTO planting_bags (planting_id, grow_bag_id) VALUES (?, ?)');
     for (const b of ids) link.run(pid, b);
-    materializeProgram(pid, { id: pid, plant_type_key, name, planted_date, count: cnt, status: 'active', notes } as PlantingRow);
+
+    const row = { id: pid, plant_type_key, name, planted_date, count: cnt, status: 'active', notes } as PlantingRow;
+    materializeProgram(pid, row);
+
+    // existing plant: record where it's at right now
+    if (initial_height !== undefined && initial_height !== null && initial_height !== '') {
+      const predicted = predictedForLog(row, today);
+      db.prepare('INSERT INTO measurements (planting_id, date, metric, value, predicted, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(pid, today, 'height_cm', Number(initial_height), predicted, 'manual', now());
+    }
+    // mark feeds already given (anything due on/before the last fertilizer date) as done
+    if (last_fertilizer_date) {
+      const base = Date.parse(planted_date);
+      const items = db.prepare('SELECT id, day_offset FROM fertilizer_plan WHERE planting_id = ?').all(pid) as any[];
+      const lastTs = Date.parse(last_fertilizer_date);
+      for (const it of items) {
+        const due = base + it.day_offset * 86_400_000;
+        if (due <= lastTs) db.prepare("UPDATE fertilizer_plan SET status = 'done' WHERE id = ?").run(it.id);
+      }
+      db.prepare('INSERT INTO events (planting_id, type, date, product, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+        .run(pid, 'fertilize', last_fertilizer_date, 'Last feed before tracking', 'Recorded when onboarding an existing plant', now());
+    }
     return pid;
   });
   const id = tx();
