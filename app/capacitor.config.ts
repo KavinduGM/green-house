@@ -2,7 +2,7 @@ import type { CapacitorConfig } from '@capacitor/cli';
 
 const config: CapacitorConfig = {
   appId: 'com.groovymark.greenhouse',
-  appName: 'Greenhouse',
+  appName: 'PlantPulse',
   webDir: 'dist',
   server: {
     androidScheme: 'https',

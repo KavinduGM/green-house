@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { loadSettings, getToken, setToken, exitDemo, api, getProjectId, setProjectId } from './lib/api';
 import type { Project } from './lib/types';
 import { Loading } from './components/ui';
+import SplashLoader from './components/SplashLoader';
 import BottomNav from './components/BottomNav';
 import Login from './screens/Login';
 import Dashboard from './screens/Dashboard';
@@ -26,15 +27,18 @@ export const useProject = () => useContext(PCtx);
 
 export default function App() {
   const [ready, setReady] = useState(false);
+  const [minElapsed, setMinElapsed] = useState(false);
   const [authed, setAuthed] = useState(false);
 
   useEffect(() => {
     loadSettings().then(() => { setAuthed(!!getToken()); setReady(true); });
+    const t = setTimeout(() => setMinElapsed(true), 1600); // let the opening scene breathe
+    return () => clearTimeout(t);
   }, []);
 
   const logout = () => { setToken(null); exitDemo(); setProjectId(null); setAuthed(false); };
 
-  if (!ready) return <Loading label="Starting…" />;
+  if (!ready || !minElapsed) return <SplashLoader />;
 
   return (
     <Ctx.Provider value={{ authed, setAuthed, logout }}>

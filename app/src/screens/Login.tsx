@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Sprout, Server, PlayCircle } from 'lucide-react';
+import { Server, PlayCircle } from 'lucide-react';
 import { login, setBaseUrl, getBaseUrl, enterDemo } from '../lib/api';
+import fullLogo from '../assets/full-logo.png';
 import { useAuth } from '../App';
 import { Spinner } from '../components/ui';
 
@@ -28,12 +29,8 @@ export default function Login() {
 
   return (
     <div className="min-h-full flex flex-col justify-center px-6 max-w-md mx-auto">
-      <div className="flex flex-col items-center mb-8">
-        <div className="w-16 h-16 rounded-2xl bg-leaf-600 flex items-center justify-center shadow-lg shadow-leaf-600/20 mb-3">
-          <Sprout className="text-white" size={32} />
-        </div>
-        <h1 className="text-2xl font-bold text-leaf-800">Greenhouse</h1>
-        <p className="text-gray-400 text-sm">Grow · Monitor · Control</p>
+      <div className="flex flex-col items-center mb-6">
+        <img src={fullLogo} alt="PlantPulse" className="w-48 max-w-[60vw]" />
       </div>
 
       <form onSubmit={submit} className="space-y-3">

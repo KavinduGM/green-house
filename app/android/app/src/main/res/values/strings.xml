@@ -1,7 +1,7 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
-    <string name="app_name">Greenhouse</string>
-    <string name="title_activity_main">Greenhouse</string>
+    <string name="app_name">PlantPulse</string>
+    <string name="title_activity_main">PlantPulse</string>
     <string name="package_name">com.groovymark.greenhouse</string>
     <string name="custom_url_scheme">com.groovymark.greenhouse</string>
 </resources>

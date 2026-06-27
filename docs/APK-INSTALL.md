@@ -1,9 +1,9 @@
 # Installing the app on your phone
 
-The file is **`dist/greenhouse-v1.0.apk`**.
+The file is **`dist/PlantPulse-v1.0.apk`**.
 
 ## Get it onto the phone (any one)
-- **USB:** connect the phone, copy `greenhouse-v1.0.apk` into its Downloads folder.
+- **USB:** connect the phone, copy `PlantPulse-v1.0.apk` into its Downloads folder.
 - **Cloud:** upload to Google Drive / send to yourself on WhatsApp/Telegram, open on the phone.
 - **Email:** mail it to yourself and download the attachment on the phone.
 

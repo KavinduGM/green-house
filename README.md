@@ -12,7 +12,7 @@ manage fertilizer schedules, and control irrigation/lighting/climate from anywhe
 | `backend/` | Node + TypeScript API, SQLite database, **embedded MQTT broker**, Claude AI proxy. Runs on your VPS. |
 | `firmware/` | ESP32 controller code (PlatformIO) for pump, light, fan + DHT22 & soil sensors. |
 | `docs/` | Step-by-step setup guides. |
-| `dist/greenhouse-v1.0.apk` | **The ready-to-install app.** Copy to your phone and tap to install. |
+| `dist/PlantPulse-v1.0.apk` | **The ready-to-install app.** Copy to your phone and tap to install. |
 
 ## Quick start (3 parts)
 
@@ -20,7 +20,7 @@ manage fertilizer schedules, and control irrigation/lighting/climate from anywhe
    (one `docker-compose.yml` runs the API + MQTT broker + DB + web dashboard). Manual
    install without Docker: [docs/DEPLOY.md](docs/DEPLOY.md). Either way you paste your
    **new** Anthropic API key into the server config (never in the app).
-2. **Install the app** → copy `dist/greenhouse-v1.0.apk` to your phone, tap it, allow
+2. **Install the app** → copy `dist/PlantPulse-v1.0.apk` to your phone, tap it, allow
    "install from unknown sources", open it, and enter your VPS address + login.
    See [docs/APK-INSTALL.md](docs/APK-INSTALL.md).
 3. **Flash the ESP32** → wire it up and flash the firmware. See [docs/HARDWARE.md](docs/HARDWARE.md).
@@ -42,5 +42,5 @@ backend, which calls Claude. Rotate the key you shared earlier — treat it as c
 
 ## Rebuilding the APK after changes
 ```bash
-./build-apk.sh        # outputs dist/greenhouse-v1.0.apk
+./build-apk.sh        # outputs dist/PlantPulse-v1.0.apk
 ```

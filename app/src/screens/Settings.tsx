@@ -55,7 +55,7 @@ export default function Settings() {
 
         <button className="btn-danger w-full" onClick={() => { logout(); nav('/'); }}><LogOut size={18} /> Sign out</button>
 
-        <p className="text-center text-xs text-gray-300">Greenhouse v1.0 · groovymark</p>
+        <p className="text-center text-xs text-gray-300">PlantPulse v1.0 · groovymark</p>
       </div>
     </div>
   );

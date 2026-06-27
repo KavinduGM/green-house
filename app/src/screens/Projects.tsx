@@ -3,6 +3,7 @@ import { Sprout, MapPin, Plus, Trash2, Pencil, Check, Home as HomeIcon, Trees, C
 import { api } from '../lib/api';
 import type { Project, GeoResult } from '../lib/types';
 import { Card, Modal, Field, Spinner, Empty } from '../components/ui';
+import fullLogo from '../assets/full-logo.png';
 
 const envMeta: Record<string, { icon: any; label: string }> = {
   indoor: { icon: HomeIcon, label: 'Indoor' },
@@ -121,9 +122,7 @@ export function Onboarding({ onCreated }: { onCreated: () => void }) {
   return (
     <div className="min-h-full flex flex-col justify-center px-6 max-w-md mx-auto py-10">
       <div className="flex flex-col items-center mb-6">
-        <div className="w-16 h-16 rounded-2xl bg-leaf-600 flex items-center justify-center shadow-lg shadow-leaf-600/20 mb-3">
-          <Sprout className="text-white" size={32} />
-        </div>
+        <img src={fullLogo} alt="PlantPulse" className="w-40 max-w-[55vw] mb-1" />
         <h1 className="text-xl font-bold text-leaf-800">Create your first project</h1>
         <p className="text-gray-400 text-sm text-center mt-1">A project is one growing space — greenhouse, field, rooftop… Add as many as you like.</p>
       </div>

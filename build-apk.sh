@@ -19,5 +19,5 @@ echo "▶ Assembling APK…"
 ( cd app/android && ./gradlew assembleDebug --no-daemon )
 
 mkdir -p dist
-cp app/android/app/build/outputs/apk/debug/app-debug.apk dist/greenhouse-v1.0.apk
-echo "✅ APK ready: dist/greenhouse-v1.0.apk"
+cp app/android/app/build/outputs/apk/debug/app-debug.apk dist/PlantPulse-v1.0.apk
+echo "✅ APK ready: dist/PlantPulse-v1.0.apk"
