@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Droplet, Lightbulb, Fan, Wifi, WifiOff, Plus, Trash2, Clock, Power, Pencil,
-  Thermometer, Droplets, Sprout, Zap, Settings2,
+  Thermometer, Droplets, Sprout, Zap, Settings2, History,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from 'recharts';
 import { api } from '../lib/api';
@@ -28,6 +29,7 @@ const isPumpish = (a: Actuator) => !!a.safety_cap_min || a.key.includes('pump') 
 
 export default function Control() {
   const { current } = useProject();
+  const nav = useNavigate();
   const [device, setDevice] = useState<Device | null>(null);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [rules, setRules] = useState<AutoRule[]>([]);
@@ -87,9 +89,12 @@ export default function Control() {
       <header className="flex items-center justify-between">
         <div><h1 className="text-xl font-bold text-leaf-800">Control</h1>
           <p className="text-sm text-gray-400">{device?.name ?? 'Controller'} {device?.fw ? `· ${device.fw}` : ''}</p></div>
-        <span className={`chip ${online ? 'bg-leaf-50 text-leaf-700' : 'bg-gray-100 text-gray-400'}`}>
-          {online ? <Wifi size={13} /> : <WifiOff size={13} />} {online ? 'Online' : 'Offline'}
-        </span>
+        <div className="flex items-center gap-2">
+          <button onClick={() => nav('/activity')} className="p-2 rounded-full bg-white shadow-card text-leaf-600" title="Activity log"><History size={18} /></button>
+          <span className={`chip ${online ? 'bg-leaf-50 text-leaf-700' : 'bg-gray-100 text-gray-400'}`}>
+            {online ? <Wifi size={13} /> : <WifiOff size={13} />} {online ? 'Online' : 'Offline'}
+          </span>
+        </div>
       </header>
 
       <div className="grid grid-cols-3 gap-3">

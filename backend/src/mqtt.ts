@@ -25,7 +25,14 @@ export function startMqtt() {
 // ---- topic helpers ----
 // device -> server: gh/<id>/up/{sensors|state|hello}
 // server -> device: gh/<id>/dn/{cmd|config}
-const upRe = /^gh\/([^/]+)\/up\/(sensors|state|hello)$/;
+const upRe = /^gh\/([^/]+)\/up\/(sensors|state|hello|event)$/;
+
+// Device-supplied epoch (seconds or ms) -> ISO; fall back to server now().
+function isoFrom(epoch: any): string {
+  const n = Number(epoch);
+  if (n && n > 1e9) return new Date(n > 1e12 ? n : n * 1000).toISOString();
+  return now();
+}
 
 aedes.on('client', (c) => console.log('[mqtt] connected:', c.id));
 
@@ -47,6 +54,7 @@ aedes.on('publish', (packet, client) => {
   }
   if (kind === 'sensors') ingestSensors(deviceId, payload);
   else if (kind === 'state') ingestState(deviceId, payload);
+  else if (kind === 'event') ingestActuatorEvent(deviceId, payload);
   else if (kind === 'hello') {
     db.prepare(
       `INSERT INTO devices (device_id, name, fw, last_seen, online) VALUES (?, ?, ?, ?, 1)
@@ -65,12 +73,29 @@ function setDeviceOnline(deviceId: string, online: boolean) {
 }
 
 function ingestSensors(deviceId: string, p: any) {
-  const ts = now();
+  const ts = isoFrom(p.ts);            // replayed offline readings carry their own ts
+  const buffered = !!p.buf;
   db.prepare(
     'INSERT INTO sensor_readings (device_id, ts, temperature, humidity, soil_moisture) VALUES (?, ?, ?, ?, ?)',
   ).run(deviceId, ts, num(p.temperature), num(p.humidity), num(p.soil_moisture));
-  db.prepare('UPDATE devices SET last_seen = ?, online = 1 WHERE device_id = ?').run(ts, deviceId);
-  emit({ type: 'sensors', deviceId, data: { temperature: num(p.temperature) ?? undefined, humidity: num(p.humidity) ?? undefined, soil_moisture: num(p.soil_moisture) ?? undefined }, ts });
+  db.prepare('UPDATE devices SET last_seen = ?, online = 1 WHERE device_id = ?').run(now(), deviceId);
+  if (!buffered) emit({ type: 'sensors', deviceId, data: { temperature: num(p.temperature) ?? undefined, humidity: num(p.humidity) ?? undefined, soil_moisture: num(p.soil_moisture) ?? undefined }, ts });
+}
+
+// Actuator on/off as reported by the device (live or replayed from flash).
+function ingestActuatorEvent(deviceId: string, p: any) {
+  const ts = isoFrom(p.ts);
+  const buffered = !!p.buf;
+  const action = p.state ? 'on' : 'off';
+  db.prepare(
+    'INSERT INTO actuator_events (device_id, actuator_key, action, source, reason, ts, buffered) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(deviceId, String(p.key ?? ''), action, p.source ?? null, p.reason ?? null, ts, buffered ? 1 : 0);
+  // keep current actuator state in sync + notify the app live
+  db.prepare('UPDATE actuators SET state = ?, updated_at = ? WHERE device_id = ? AND key = ?').run(p.state ? 1 : 0, now(), deviceId, String(p.key ?? ''));
+  if (!buffered) {
+    emit({ type: 'state', deviceId, data: { [String(p.key)]: !!p.state } });
+    emit({ type: 'automation', deviceId, message: `${p.key} ${action}${p.reason ? ' — ' + p.reason : ''}` });
+  }
 }
 
 function ingestState(deviceId: string, p: any) {

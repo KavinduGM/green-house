@@ -78,6 +78,16 @@ iotRouter.get('/devices/:id/sensors/history', (req, res) => {
   );
 });
 
+// ---- actuator activity log (proof of scheduled/auto/manual on-off) ----
+iotRouter.get('/devices/:id/actuator-events', (req, res) => {
+  const hours = Math.min(Number(req.query.hours ?? 168), 24 * 60);
+  const since = new Date(Date.now() - hours * 3_600_000).toISOString();
+  const rows = db
+    .prepare('SELECT * FROM actuator_events WHERE device_id = ? AND ts >= ? ORDER BY ts DESC LIMIT 500')
+    .all(req.params.id, since) as any[];
+  res.json(rows.map((r) => ({ ...r, buffered: !!r.buffered })));
+});
+
 // ---- OTA: upload a firmware .bin and push it to the device over the air ----
 iotRouter.post('/devices/:id/ota', fwUpload.single('firmware'), (req, res) => {
   const { id } = req.params;

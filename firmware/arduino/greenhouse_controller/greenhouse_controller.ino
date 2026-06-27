@@ -1,16 +1,17 @@
 /* =====================================================================
-   GREENHOUSE ESP32 CONTROLLER  —  v1.2  (dynamic actuators + OTA + self-heal)
+   GREENHOUSE ESP32 CONTROLLER  —  v1.3
+   dynamic actuators + OTA + self-heal + activity log + OFFLINE BUFFERING
    ---------------------------------------------------------------------
-   - Reads DHT22 (temp/humidity) + capacitive soil-moisture sensor
-   - Drives ANY number of relays you define in the app (key + GPIO pin),
-     pushed live from the server — no reflash needed to add a button.
-   - Generic automation: any actuator can be driven by any sensor + thresholds.
-   - Self-healing reconnect + reboot, and OTA firmware updates over the internet.
+   - Logs every actuator on/off (source + reason) so schedules & automation
+     are provable in the app.
+   - Buffers events AND sensor readings to onboard flash (LittleFS) when
+     offline, then replays them to the server on reconnect — survives WiFi
+     drops, server downtime and reboots. Real timestamps via NTP.
+     (For exact time through full power cuts too, add a DS3231 RTC later.)
 
-   ----- BEFORE YOU UPLOAD (one time, via USB) -----
-   Boards Manager: "esp32 by Espressif". Libraries: PubSubClient, ArduinoJson v7,
-   DHT sensor library (+ Adafruit Unified Sensor). Edit CONFIG below. Upload.
-   After this, add/rename relays and rules from the app — they push automatically.
+   Boards Manager: "esp32 by Espressif". Use a partition scheme WITH OTA + a
+   filesystem (the default "...with spiffs" is fine). Libraries: PubSubClient,
+   ArduinoJson v7, DHT sensor library (+ Adafruit Unified Sensor).
    ===================================================================== */
 
 #include <WiFi.h>
@@ -18,6 +19,8 @@
 #include <ArduinoJson.h>
 #include <DHT.h>
 #include <HTTPUpdate.h>
+#include <LittleFS.h>
+#include <time.h>
 
 /* ===================== CONFIG — EDIT THESE ===================== */
 #define WIFI_SSID       "YOUR_WIFI_SSID"
@@ -27,7 +30,7 @@
 #define MQTT_USER       "greenhouse"
 #define MQTT_PASS       "0eyYG1ihBnUNG8Q4cGo7"
 #define DEVICE_ID       "greenhouse-01"
-#define FW_VERSION      "fw-1.2.0"
+#define FW_VERSION      "fw-1.3.0"
 
 #define PIN_DHT         4
 #define PIN_SOIL        34
@@ -35,7 +38,11 @@
 #define SOIL_WET        1300
 
 #define SENSOR_INTERVAL_MS   10000
-#define OFFLINE_REBOOT_MS    300000     // self-heal: reboot if no MQTT for 5 min
+#define OFFLINE_SENSOR_MS    300000     // buffer a reading every 5 min while offline
+#define OFFLINE_REBOOT_MS    600000     // self-heal reboot if no MQTT for 10 min
+#define QFILE   "/q.log"                // buffered actuator events
+#define SFILE   "/s.log"                // buffered sensor readings
+#define SFILE_MAX 180000                // cap offline sensor buffer (~180 KB)
 /* ============================================================== */
 
 WiFiClient   net;
@@ -56,11 +63,19 @@ struct Rule {
 Rule rules[MAX_RULES]; int ruleCount = 0;
 
 float gTemp = NAN, gHum = NAN, gSoil = NAN;
-uint32_t lastSensor = 0, lastMqttOk = 0, lastReconnect = 0;
+uint32_t lastSensor = 0, lastOfflineSensor = 0, lastMqttOk = 0, lastReconnect = 0;
 char topicBuf[64];
 
 const char* T(const char* s) { snprintf(topicBuf, sizeof(topicBuf), "gh/%s/%s", DEVICE_ID, s); return topicBuf; }
 Act* findAct(const char* k) { for (int i = 0; i < actCount; i++) if (strcmp(acts[i].key, k) == 0) return &acts[i]; return nullptr; }
+uint32_t nowEpoch() { time_t t = time(nullptr); return (t > 1700000000) ? (uint32_t)t : 0; }   // 0 = clock not synced
+
+void appendLine(const char* path, const char* line) {
+  File f = LittleFS.open(path, FILE_APPEND);
+  if (!f) return;
+  f.println(line);
+  f.close();
+}
 
 void applyRelay(Act &a) {
   if (a.pin < 0) return;
@@ -75,15 +90,33 @@ void publishState() {
   mqtt.publish(T("up/state"), (uint8_t*)buf, n, false);
 }
 
-void setActuator(Act &a, bool on, uint32_t durationMs = 0) {
+// Record an actuator transition (live -> publish; offline -> buffer to flash).
+void emitEvent(const char* key, bool state, const char* source, const char* reason) {
+  JsonDocument d;
+  d["key"] = key; d["state"] = state;
+  if (source && source[0]) d["source"] = source;
+  if (reason && reason[0]) d["reason"] = reason;
+  if (mqtt.connected()) {
+    char buf[256]; size_t n = serializeJson(d, buf, sizeof(buf));
+    mqtt.publish(T("up/event"), (uint8_t*)buf, n, false);
+  } else {
+    d["ts"] = nowEpoch(); d["buf"] = 1;
+    char buf[256]; serializeJson(d, buf, sizeof(buf));
+    appendLine(QFILE, buf);
+  }
+}
+
+void setActuator(Act &a, bool on, uint32_t durationMs = 0, const char* source = "manual", const char* reason = "") {
+  bool prev = a.on;
   a.on = on;
   a.offAt = (on && durationMs > 0) ? millis() + durationMs : 0;
-  if (a.capMin > 0 && on) {                                   // per-actuator safety cap
+  if (a.capMin > 0 && on) {
     uint32_t cap = millis() + (uint32_t)a.capMin * 60000UL;
     if (a.offAt == 0 || a.offAt > cap) a.offAt = cap;
   }
   applyRelay(a);
   publishState();
+  if (prev != on) emitEvent(a.key, on, source, reason);   // log only real transitions
 }
 
 float sensorVal(const char* s) {
@@ -97,20 +130,20 @@ void runAutomation() {
   for (int i = 0; i < actCount; i++) {
     Act &a = acts[i];
     if (strcmp(a.mode, "auto") != 0) continue;
-    bool reqOn = false, reqOff = false; uint32_t dur = 0;
+    bool reqOn = false, reqOff = false; uint32_t dur = 0; char rsn[56] = "";
     for (int j = 0; j < ruleCount; j++) {
       Rule &r = rules[j];
       if (strcmp(r.actuator, a.key) != 0) continue;
       float v = sensorVal(r.sensor);
       if (isnan(v)) continue;
-      if (r.hasOnAbove && v >= r.onAbove) reqOn = true;
-      if (r.hasOnBelow && v <= r.onBelow) { reqOn = true; if (r.maxRunMin > 0) dur = (uint32_t)r.maxRunMin * 60000UL; }
-      if (r.hasOffBelow && v <= r.offBelow) reqOff = true;
-      if (r.hasOffAbove && v >= r.offAbove) reqOff = true;
+      if (r.hasOnAbove && v >= r.onAbove) { reqOn = true; snprintf(rsn, sizeof(rsn), "%s %.1f >= %.0f", r.sensor, v, r.onAbove); }
+      if (r.hasOnBelow && v <= r.onBelow) { reqOn = true; if (r.maxRunMin > 0) dur = (uint32_t)r.maxRunMin * 60000UL; snprintf(rsn, sizeof(rsn), "%s %.1f <= %.0f", r.sensor, v, r.onBelow); }
+      if (r.hasOffBelow && v <= r.offBelow) { reqOff = true; if (!reqOn) snprintf(rsn, sizeof(rsn), "%s %.1f <= %.0f", r.sensor, v, r.offBelow); }
+      if (r.hasOffAbove && v >= r.offAbove) { reqOff = true; if (!reqOn) snprintf(rsn, sizeof(rsn), "%s %.1f >= %.0f", r.sensor, v, r.offAbove); }
     }
     bool want = a.on;
-    if (reqOn) want = true; else if (reqOff) want = false;     // ON wins on conflict
-    if (want != a.on) setActuator(a, want, want ? dur : 0);
+    if (reqOn) want = true; else if (reqOff) want = false;
+    if (want != a.on) setActuator(a, want, want ? dur : 0, "auto", rsn);
   }
 }
 
@@ -158,6 +191,22 @@ void doOta(const char* url) {
   if (r == HTTP_UPDATE_FAILED) Serial.printf("OTA failed: %s\n", httpUpdate.getLastErrorString().c_str());
 }
 
+// Replay buffered events/sensors recorded while offline, then clear the files.
+void flushQueues() {
+  if (LittleFS.exists(QFILE)) {
+    File f = LittleFS.open(QFILE, FILE_READ);
+    while (f && f.available()) { String l = f.readStringUntil('\n'); l.trim(); if (l.length()) mqtt.publish(T("up/event"), l.c_str()); }
+    if (f) f.close();
+    LittleFS.remove(QFILE);
+  }
+  if (LittleFS.exists(SFILE)) {
+    File f = LittleFS.open(SFILE, FILE_READ);
+    while (f && f.available()) { String l = f.readStringUntil('\n'); l.trim(); if (l.length()) mqtt.publish(T("up/sensors"), l.c_str()); }
+    if (f) f.close();
+    LittleFS.remove(SFILE);
+  }
+}
+
 void readAndPublishSensors() {
   float h = dht.readHumidity(), t = dht.readTemperature();
   if (!isnan(h)) gHum = h;
@@ -170,8 +219,19 @@ void readAndPublishSensors() {
   if (!isnan(gTemp)) d["temperature"] = gTemp;
   if (!isnan(gHum)) d["humidity"] = gHum;
   d["soil_moisture"] = gSoil;
-  char buf[160]; size_t n = serializeJson(d, buf, sizeof(buf));
-  mqtt.publish(T("up/sensors"), (uint8_t*)buf, n, false);
+
+  if (mqtt.connected()) {
+    char buf[160]; size_t n = serializeJson(d, buf, sizeof(buf));
+    mqtt.publish(T("up/sensors"), (uint8_t*)buf, n, false);
+  } else if (millis() - lastOfflineSensor >= OFFLINE_SENSOR_MS) {
+    lastOfflineSensor = millis();
+    File chk = LittleFS.open(SFILE, FILE_READ); size_t sz = chk ? chk.size() : 0; if (chk) chk.close();
+    if (sz < SFILE_MAX) {                                  // bounded buffer — don't fill flash
+      d["ts"] = nowEpoch(); d["buf"] = 1;
+      char buf[180]; serializeJson(d, buf, sizeof(buf));
+      appendLine(SFILE, buf);
+    }
+  }
 }
 
 void onMessage(char* topic, byte* payload, unsigned int len) {
@@ -181,7 +241,7 @@ void onMessage(char* topic, byte* payload, unsigned int len) {
     Act *a = findAct(d["key"] | "");
     if (!a) return;
     uint32_t dur = d["duration_min"].is<int>() ? (uint32_t)d["duration_min"] * 60000UL : 0;
-    setActuator(*a, strcmp(d["action"] | "", "on") == 0, dur);
+    setActuator(*a, strcmp(d["action"] | "", "on") == 0, dur, d["source"] | "manual", "");
   } else if (strstr(topic, "/dn/ota")) {
     const char* url = d["url"] | "";
     if (strlen(url) > 0) doOta(url);
@@ -197,17 +257,18 @@ bool mqttConnectOnce() {
   mqtt.subscribe(T("dn/ota"));
   JsonDocument d; d["name"] = "Greenhouse Controller"; d["fw"] = FW_VERSION;
   char buf[96]; size_t n = serializeJson(d, buf, sizeof(buf));
-  mqtt.publish(T("up/hello"), (uint8_t*)buf, n, false);   // server replies with dn/config
+  mqtt.publish(T("up/hello"), (uint8_t*)buf, n, false);
   publishState();
+  flushQueues();                                           // replay anything buffered offline
   return true;
 }
 
 void setup() {
   Serial.begin(115200);
-  // boot-safe: park the 3 legacy relay pins OFF (active-low) until config arrives
   for (int p : {25, 26, 27}) { pinMode(p, OUTPUT); digitalWrite(p, HIGH); }
   analogReadResolution(12);
   dht.begin();
+  LittleFS.begin(true);                                    // format on first run if needed
 
   WiFi.mode(WIFI_STA);
   WiFi.setAutoReconnect(true);
@@ -218,9 +279,11 @@ void setup() {
   while (WiFi.status() != WL_CONNECTED && millis() - start < 20000) { delay(300); Serial.print("."); }
   Serial.println(WiFi.status() == WL_CONNECTED ? " connected" : " (retrying)");
 
+  configTime(0, 0, "pool.ntp.org", "time.google.com");     // real timestamps when online
+
   mqtt.setServer(MQTT_HOST, MQTT_PORT);
   mqtt.setCallback(onMessage);
-  mqtt.setBufferSize(2048);    // room for dynamic actuator/rule config
+  mqtt.setBufferSize(2048);
   mqtt.setKeepAlive(20);
   lastMqttOk = millis();
 }
@@ -234,11 +297,11 @@ void loop() {
   }
   if (nowMs - lastMqttOk > OFFLINE_REBOOT_MS) { Serial.println("Offline too long — rebooting"); delay(200); ESP.restart(); }
 
-  for (int i = 0; i < actCount; i++) if (acts[i].on && acts[i].offAt && nowMs >= acts[i].offAt) setActuator(acts[i], false);
+  for (int i = 0; i < actCount; i++) if (acts[i].on && acts[i].offAt && nowMs >= acts[i].offAt) setActuator(acts[i], false, 0, "timer", "duration elapsed");
 
   if (nowMs - lastSensor >= SENSOR_INTERVAL_MS) {
     lastSensor = nowMs;
-    if (mqtt.connected()) readAndPublishSensors();
+    readAndPublishSensors();
     runAutomation();
   }
 }

@@ -241,6 +241,7 @@ const insightFor = (p: DemoPlanting) => {
 // ---------------- router ----------------
 export async function demoRequest<T>(method: string, path: string, body?: unknown): Promise<T> {
   await new Promise((r) => setTimeout(r, 180)); // tiny latency so spinners show
+  path = path.split('?')[0]; // ignore query string when route-matching
   const m = (re: RegExp) => path.match(re);
   let mm: RegExpMatchArray | null;
 
@@ -364,6 +365,18 @@ export async function demoRequest<T>(method: string, path: string, body?: unknow
 
   if (path === '/api/devices') return [{ device_id: 'demo', name: 'Greenhouse Controller', online: true, fw: 'fw-1.2.0 (demo)',
     actuators: demoActuators }] as T;
+  if ((mm = m(/^\/api\/devices\/[^/]+\/actuator-events$/))) {
+    const H = 3_600_000;
+    return [
+      { id: id(), actuator_key: 'pump', action: 'on', source: 'schedule', reason: null, ts: iso(Date.now() - 2 * H), buffered: false },
+      { id: id(), actuator_key: 'pump', action: 'off', source: 'timer', reason: 'duration elapsed', ts: iso(Date.now() - 2 * H + 3 * 60000), buffered: false },
+      { id: id(), actuator_key: 'fan', action: 'on', source: 'auto', reason: 'temperature 33.1 >= 32', ts: iso(Date.now() - 4 * H), buffered: false },
+      { id: id(), actuator_key: 'fan', action: 'off', source: 'auto', reason: 'temperature 28.6 <= 29', ts: iso(Date.now() - 5 * H), buffered: false },
+      { id: id(), actuator_key: 'light', action: 'on', source: 'manual', reason: null, ts: iso(Date.now() - 8 * H), buffered: false },
+      { id: id(), actuator_key: 'pump', action: 'on', source: 'schedule', reason: null, ts: iso(Date.now() - 26 * H), buffered: true },
+      { id: id(), actuator_key: 'pump', action: 'off', source: 'timer', reason: 'duration elapsed', ts: iso(Date.now() - 26 * H + 3 * 60000), buffered: true },
+    ] as T;
+  }
   if ((mm = m(/^\/api\/devices\/[^/]+\/sensors\/latest$/))) return { ts: iso(Date.now()), ...sensor } as T;
   if ((mm = m(/^\/api\/devices\/[^/]+\/sensors\/history$/))) {
     const out = []; for (let h = 24; h >= 0; h--) out.push({ ts: iso(Date.now() - h * 3_600_000),

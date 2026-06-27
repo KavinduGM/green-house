@@ -11,6 +11,7 @@ import Plants from './screens/Plants';
 import PlantDetail from './screens/PlantDetail';
 import Visualizer from './screens/Visualizer';
 import Control from './screens/Control';
+import Activity from './screens/Activity';
 import Weather from './screens/Weather';
 import Settings from './screens/Settings';
 import { Onboarding, ProjectsScreen } from './screens/Projects';
@@ -81,7 +82,7 @@ function ProjectArea() {
 function Shell({ hasIot }: { hasIot: boolean }) {
   const loc = useLocation();
   const { projects, current, switchProject, reload } = useProject();
-  const hideNav = loc.pathname.startsWith('/plants/') || loc.pathname === '/settings';
+  const hideNav = loc.pathname.startsWith('/plants/') || loc.pathname === '/settings' || loc.pathname === '/activity';
   return (
     <div className="max-w-md mx-auto min-h-full pb-20">
       <Routes>
@@ -92,6 +93,7 @@ function Shell({ hasIot }: { hasIot: boolean }) {
         <Route path="/visualizer" element={<Visualizer />} />
         <Route path="/weather" element={<Weather />} />
         <Route path="/control" element={hasIot ? <Control /> : <Navigate to="/weather" replace />} />
+        <Route path="/activity" element={hasIot ? <Activity /> : <Navigate to="/dashboard" replace />} />
         <Route path="/projects" element={
           <ProjectsScreen projects={projects} currentId={current!.id}
             onSwitch={(id) => switchProject(id)} onChanged={reload} />} />

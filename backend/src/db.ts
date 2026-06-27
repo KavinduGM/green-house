@@ -185,6 +185,22 @@ for (const [col, def] of [
 // Custom crops the grower adds (beyond the built-in catalog).
 try { db.exec('ALTER TABLE plant_types ADD COLUMN is_custom INTEGER NOT NULL DEFAULT 0'); } catch { /* already added */ }
 
+// Actuator activity log — proof of every on/off (manual/schedule/auto/timer),
+// sourced from the device so it reflects what really happened on the hardware.
+db.exec(`
+CREATE TABLE IF NOT EXISTS actuator_events (
+  id INTEGER PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  actuator_key TEXT NOT NULL,
+  action TEXT NOT NULL,        -- on | off
+  source TEXT,                 -- manual | schedule | auto | timer
+  reason TEXT,
+  ts TEXT NOT NULL,
+  buffered INTEGER NOT NULL DEFAULT 0  -- 1 = replayed from device flash after an outage
+);
+CREATE INDEX IF NOT EXISTS idx_actevt ON actuator_events(device_id, ts);
+`);
+
 // Generic automation rules — any actuator driven by any sensor + thresholds.
 db.exec(`
 CREATE TABLE IF NOT EXISTS auto_rules (
