@@ -1,6 +1,5 @@
 import { db, now } from '../db.js';
-import { sendCommand } from '../mqtt.js';
-import { emit } from '../bus.js';
+import { sendCommand, recordActuatorEvent } from '../mqtt.js';
 
 // Ticks every minute. Fires schedules whose on_time matches the current minute
 // (turns the actuator on, then off after duration_min). The ESP32 also enforces
@@ -37,15 +36,17 @@ function tick() {
     if (s.last_run === `${todayStr} ${hhmm}`) continue; // already fired this minute today
     db.prepare('UPDATE schedules SET last_run = ? WHERE id = ?').run(`${todayStr} ${hhmm}`, s.id);
 
+    const online = (db.prepare('SELECT online FROM devices WHERE device_id = ?').get(s.device_id) as any)?.online;
     sendCommand(s.device_id, { key: s.actuator_key, action: 'on', duration_min: s.duration_min, source: 'schedule' });
     setLocalState(s.device_id, s.actuator_key, 1);
-    emit({ type: 'automation', deviceId: s.device_id, message: `Schedule: ${s.actuator_key} ON for ${s.duration_min} min` });
+    recordActuatorEvent(s.device_id, s.actuator_key, 'on', 'schedule',
+      online ? `scheduled ${s.on_time}, ${s.duration_min} min` : 'scheduled — but device OFFLINE');
 
     if (s.duration_min > 0) {
       setTimeout(() => {
         sendCommand(s.device_id, { key: s.actuator_key, action: 'off', source: 'schedule' });
         setLocalState(s.device_id, s.actuator_key, 0);
-        emit({ type: 'automation', deviceId: s.device_id, message: `Schedule: ${s.actuator_key} OFF (duration elapsed)` });
+        recordActuatorEvent(s.device_id, s.actuator_key, 'off', 'schedule', 'duration elapsed');
       }, s.duration_min * 60_000);
     }
   }

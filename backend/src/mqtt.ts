@@ -82,19 +82,35 @@ function ingestSensors(deviceId: string, p: any) {
   if (!buffered) emit({ type: 'sensors', deviceId, data: { temperature: num(p.temperature) ?? undefined, humidity: num(p.humidity) ?? undefined, soil_moisture: num(p.soil_moisture) ?? undefined }, ts });
 }
 
+// Server-side log of an actuator on/off (used by the scheduler + manual control),
+// so schedules are provable even on firmware that doesn't report events.
+export function recordActuatorEvent(deviceId: string, key: string, action: 'on' | 'off', source: string, reason?: string) {
+  db.prepare(
+    'INSERT INTO actuator_events (device_id, actuator_key, action, source, reason, ts, buffered) VALUES (?, ?, ?, ?, ?, ?, 0)',
+  ).run(deviceId, key, action, source, reason ?? null, now());
+  emit({ type: 'automation', deviceId, message: `${key} ${action}${reason ? ' — ' + reason : ''}` });
+}
+
 // Actuator on/off as reported by the device (live or replayed from flash).
 function ingestActuatorEvent(deviceId: string, p: any) {
   const ts = isoFrom(p.ts);
   const buffered = !!p.buf;
+  const key = String(p.key ?? '');
   const action = p.state ? 'on' : 'off';
-  db.prepare(
-    'INSERT INTO actuator_events (device_id, actuator_key, action, source, reason, ts, buffered) VALUES (?, ?, ?, ?, ?, ?, ?)',
-  ).run(deviceId, String(p.key ?? ''), action, p.source ?? null, p.reason ?? null, ts, buffered ? 1 : 0);
-  // keep current actuator state in sync + notify the app live
-  db.prepare('UPDATE actuators SET state = ?, updated_at = ? WHERE device_id = ? AND key = ?').run(p.state ? 1 : 0, now(), deviceId, String(p.key ?? ''));
+  // Dedup: if the server already logged this same on/off (schedule/manual) in the
+  // last 20s, don't double-record the device's echo of it.
+  const dupe = !buffered && db
+    .prepare("SELECT 1 FROM actuator_events WHERE device_id=? AND actuator_key=? AND action=? AND ts >= ? LIMIT 1")
+    .get(deviceId, key, action, new Date(Date.now() - 20_000).toISOString());
+  if (!dupe) {
+    db.prepare(
+      'INSERT INTO actuator_events (device_id, actuator_key, action, source, reason, ts, buffered) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(deviceId, key, action, p.source ?? null, p.reason ?? null, ts, buffered ? 1 : 0);
+  }
+  db.prepare('UPDATE actuators SET state = ?, updated_at = ? WHERE device_id = ? AND key = ?').run(p.state ? 1 : 0, now(), deviceId, key);
   if (!buffered) {
-    emit({ type: 'state', deviceId, data: { [String(p.key)]: !!p.state } });
-    emit({ type: 'automation', deviceId, message: `${p.key} ${action}${p.reason ? ' — ' + p.reason : ''}` });
+    emit({ type: 'state', deviceId, data: { [key]: !!p.state } });
+    if (!dupe) emit({ type: 'automation', deviceId, message: `${key} ${action}${p.reason ? ' — ' + p.reason : ''}` });
   }
 }
 

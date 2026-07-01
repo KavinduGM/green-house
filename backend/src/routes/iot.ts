@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { db, now } from '../db.js';
 import { config } from '../config.js';
-import { sendCommand, pushConfig, sendOta } from '../mqtt.js';
+import { sendCommand, pushConfig, sendOta, recordActuatorEvent } from '../mqtt.js';
 import { emit } from '../bus.js';
 
 export const iotRouter = Router();
@@ -116,6 +116,7 @@ iotRouter.post('/devices/:id/actuators/:key', (req, res) => {
      ON CONFLICT(device_id, key) DO UPDATE SET state=excluded.state, updated_at=excluded.updated_at`,
   ).run(id, key, action === 'on' ? 1 : 0, now());
   emit({ type: 'state', deviceId: id, data: { [key]: action === 'on' } });
+  recordActuatorEvent(id, key, action, 'manual', duration_min ? `run ${duration_min} min` : undefined);
   res.json({ ok: true, key, action });
 });
 
