@@ -201,6 +201,22 @@ CREATE TABLE IF NOT EXISTS actuator_events (
 CREATE INDEX IF NOT EXISTS idx_actevt ON actuator_events(device_id, ts);
 `);
 
+// Weekly plant progress photos + AI analysis (growth, health, estimates).
+db.exec(`
+CREATE TABLE IF NOT EXISTS plant_photos (
+  id INTEGER PRIMARY KEY,
+  planting_id INTEGER NOT NULL REFERENCES plantings(id) ON DELETE CASCADE,
+  date TEXT NOT NULL,
+  image_path TEXT,
+  estimated_height_cm REAL,
+  health_pct REAL,
+  stage TEXT,
+  ai_json TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_photos ON plant_photos(planting_id, date);
+`);
+
 // Generic automation rules — any actuator driven by any sensor + thresholds.
 db.exec(`
 CREATE TABLE IF NOT EXISTS auto_rules (

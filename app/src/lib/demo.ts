@@ -76,6 +76,8 @@ const events: Record<number, any[]> = {
   3: [],
 };
 
+const demoPhotos: Record<number, any[]> = {};
+
 let demoActuators: any[] = [
   { key: 'pump', name: 'Water Pump', pin: 26, active_low: true, is_default: true, safety_cap_min: 30, state: false, mode: 'schedule' },
   { key: 'light', name: 'Grow Light', pin: 27, active_low: true, is_default: true, safety_cap_min: null, state: false, mode: 'manual' },
@@ -352,6 +354,10 @@ export async function demoRequest<T>(method: string, path: string, body?: unknow
         product: fd.get('product') || undefined, dosage: fd.get('dosage') || undefined, severity: fd.get('severity') || undefined,
         notes: fd.get('notes') || undefined, photo_path: photo || undefined });
       return { id: nextId } as T; }
+    if (method === 'POST') { const b: any = body;   // JSON event (e.g. bulk fertilize, no photo)
+      (events[pid] ??= []).push({ id: id(), planting_id: pid, type: b.type, date: b.date || today(),
+        product: b.product || undefined, dosage: b.dosage || undefined, severity: b.severity || undefined, notes: b.notes || undefined });
+      return { id: nextId } as T; }
   }
   if ((mm = m(/^\/api\/events\/(\d+)$/))) { const i = +mm[1]; for (const k in events) events[k] = events[k].filter((x) => x.id !== i); return { ok: true } as T; }
 
@@ -359,6 +365,22 @@ export async function demoRequest<T>(method: string, path: string, body?: unknow
     diagnosis: 'Early aphid infestation', likely_causes: ['Warm, sheltered conditions', 'New tender growth'],
     severity: 'low', treatment: ['Spray neem oil (5 ml/L) on undersides of leaves', 'Repeat after 5 days', 'Introduce ladybugs if available'],
   } as T;
+
+  // weekly photos + AI check-up
+  if ((mm = m(/^\/api\/plantings\/(\d+)\/photo$/)) && method === 'POST' && fd) {
+    const pid = +mm[1]; const img = await readFile(fd.get('image') as File);
+    const p = plantings.find((x) => x.id === pid); const t = p ? timeline(p) : null;
+    const est = Math.round(t ? t.expectedHeightToday : 20);
+    const ai = { stage: t ? stageFor(t.ageDays, t.model) : 'vegetative', health_pct: 84, estimated_height_cm: est,
+      summary: 'Looks healthy — steady growth for its age, good leaf colour.',
+      observations: ['New growth at the top', 'Even, green leaves'], issues: [],
+      recommendations: ['Keep watering consistent', 'Feed YaraMila Target this week', 'Watch for aphids on new shoots'] };
+    (demoPhotos[pid] ??= []).unshift({ id: id(), planting_id: pid, date: today(), image_path: img, estimated_height_cm: est, health_pct: ai.health_pct, stage: ai.stage, ai });
+    if (t) (measurements[pid] ??= []).push({ id: id(), planting_id: pid, date: today(), metric: 'height_cm', value: est, predicted: predictHeight(t.model, t.ageDays) });
+    return { id: nextId, image: img, ai } as T;
+  }
+  if ((mm = m(/^\/api\/plantings\/(\d+)\/photos$/))) return (demoPhotos[+mm![1]] ?? []) as T;
+  if ((mm = m(/^\/api\/plant-photos\/(\d+)$/)) && method === 'DELETE') { const i = +mm![1]; for (const k in demoPhotos) demoPhotos[k] = demoPhotos[k].filter((x) => x.id !== i); return { ok: true } as T; }
 
   if ((mm = m(/^\/api\/fertilizer\/(\d+)\/(apply|skip)$/))) return { ok: true } as T;
   if (path === '/api/fertilizer/due') return dueFertilizer() as T;

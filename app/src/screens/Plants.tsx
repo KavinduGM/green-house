@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Plus, Sprout, ChevronRight } from 'lucide-react';
+import { Plus, Sprout, ChevronRight, FlaskConical } from 'lucide-react';
 import { api } from '../lib/api';
 import type { Planting, PlantType, GrowBag } from '../lib/types';
 import { Card, Loading, Modal, Field, Empty, Pill, Spinner } from '../components/ui';
@@ -11,6 +11,7 @@ export default function Plants() {
   const [bags, setBags] = useState<GrowBag[]>([]);
   const [loading, setLoading] = useState(true);
   const [open, setOpen] = useState(false);
+  const [fertOpen, setFertOpen] = useState(false);
 
   const load = async () => {
     const [p, t, b] = await Promise.all([
@@ -29,7 +30,10 @@ export default function Plants() {
       <header className="flex items-center justify-between">
         <div><h1 className="text-xl font-bold text-leaf-800">Plants</h1>
           <p className="text-sm text-gray-400">{plantings.length} plantings tracked</p></div>
-        <button className="btn-primary !px-3" onClick={() => setOpen(true)}><Plus size={18} /> Plant</button>
+        <div className="flex gap-2">
+          <button className="btn-ghost !px-3" onClick={() => setFertOpen(true)} title="Record fertilizing"><FlaskConical size={18} /></button>
+          <button className="btn-primary !px-3" onClick={() => setOpen(true)}><Plus size={18} /> Plant</button>
+        </div>
       </header>
 
       {plantings.length === 0 ? (
@@ -41,7 +45,94 @@ export default function Plants() {
       )}
 
       <AddModal open={open} onClose={() => setOpen(false)} types={types} bags={bags} onReloadTypes={load} onSaved={() => { setOpen(false); load(); }} />
+      <FertilizeModal open={fertOpen} onClose={() => setFertOpen(false)} plantings={plantings} onSaved={() => { setFertOpen(false); load(); }} />
     </div>
+  );
+}
+
+const FERT_PRODUCTS = ['Albert Solution', 'YaraMila Target', 'Grow More K44'];
+const FERT_METHODS = ['foliar spray', 'soil drench', 'fertigation'];
+
+function FertilizeModal({ open, onClose, plantings, onSaved }: {
+  open: boolean; onClose: () => void; plantings: Planting[]; onSaved: () => void;
+}) {
+  const active = plantings.filter((p) => p.status === 'active');
+  const [product, setProduct] = useState('');
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [dosage, setDosage] = useState('');
+  const [method, setMethod] = useState('foliar spray');
+  const [notes, setNotes] = useState('');
+  const [selected, setSelected] = useState<number[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const allSel = selected.length === active.length && active.length > 0;
+  const toggle = (id: number) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : [...s, id]));
+  const toggleAll = () => setSelected(allSel ? [] : active.map((p) => p.id));
+
+  const save = async () => {
+    if (!product.trim()) { setErr('Enter the fertilizer name'); return; }
+    if (selected.length === 0) { setErr('Select at least one plant'); return; }
+    setBusy(true); setErr('');
+    try {
+      // one fertilize event per selected planting (reuses the per-plant care log)
+      await Promise.all(selected.map((pid) =>
+        api.post(`/api/plantings/${pid}/events`, {
+          type: 'fertilize', date, product: product.trim(),
+          dosage: dosage.trim() || undefined, notes: [method, notes.trim()].filter(Boolean).join(' · ') || undefined,
+        })));
+      setProduct(''); setDosage(''); setNotes(''); setSelected([]);
+      onSaved();
+    } catch (e: any) { setErr(e.message); } finally { setBusy(false); }
+  };
+
+  return (
+    <Modal open={open} onClose={onClose} title="Record fertilizing">
+      <div className="space-y-3.5">
+        <Field label="Fertilizer">
+          <input className="input" value={product} onChange={(e) => setProduct(e.target.value)} list="fertprods" placeholder="e.g. YaraMila Target" />
+          <datalist id="fertprods">{FERT_PRODUCTS.map((p) => <option key={p} value={p} />)}</datalist>
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Date"><input type="date" className="input" value={date} onChange={(e) => setDate(e.target.value)} /></Field>
+          <Field label="Dosage (optional)"><input className="input" value={dosage} onChange={(e) => setDosage(e.target.value)} placeholder="e.g. 2 g/L" /></Field>
+        </div>
+        <Field label="Method">
+          <div className="grid grid-cols-3 gap-2">
+            {FERT_METHODS.map((mth) => (
+              <button key={mth} onClick={() => setMethod(mth)}
+                className={`rounded-lg py-2 text-[11px] capitalize border ${method === mth ? 'border-leaf-500 bg-leaf-50 text-leaf-700 font-semibold' : 'border-gray-200 text-gray-500'}`}>{mth}</button>
+            ))}
+          </div>
+        </Field>
+
+        <Field label={`Plants fertilized (${selected.length} selected)`}>
+          {active.length === 0 ? (
+            <p className="text-xs text-gray-400">No active plants to fertilize.</p>
+          ) : (
+            <>
+              <button onClick={toggleAll} className="text-xs text-leaf-600 font-medium mb-2">{allSel ? 'Clear all' : 'Select all'}</button>
+              <div className="space-y-1.5 max-h-52 overflow-y-auto">
+                {active.map((p) => (
+                  <button key={p.id} onClick={() => toggle(p.id)}
+                    className={`w-full flex items-center gap-2 rounded-xl border px-3 py-2 text-left ${selected.includes(p.id) ? 'border-leaf-500 bg-leaf-50' : 'border-gray-200'}`}>
+                    <span className={`w-4 h-4 rounded border flex items-center justify-center text-white text-[10px] ${selected.includes(p.id) ? 'bg-leaf-600 border-leaf-600' : 'border-gray-300'}`}>{selected.includes(p.id) ? '✓' : ''}</span>
+                    <span className="text-sm flex-1 truncate">{p.name}</span>
+                    <span className="text-[11px] text-gray-400">{p.sinhala}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </Field>
+
+        <Field label="Notes (optional)"><input className="input" value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="anything to remember" /></Field>
+        {err && <p className="text-sm text-red-600">{err}</p>}
+        <button className="btn-primary w-full" onClick={save} disabled={busy}>
+          {busy ? <Spinner /> : `Record for ${selected.length || 'selected'} plant${selected.length === 1 ? '' : 's'}`}
+        </button>
+      </div>
+    </Modal>
   );
 }
 

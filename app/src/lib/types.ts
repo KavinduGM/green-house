@@ -62,6 +62,16 @@ export interface PlantEvent {
   id: number; type: string; date: string; product?: string; dosage?: string;
   severity?: string; photo_path?: string; notes?: string;
 }
+export interface PhotoAnalysis {
+  stage: string; health_pct: number; estimated_height_cm: number | null;
+  summary: string; observations: string[]; issues: string[]; recommendations: string[];
+}
+export interface PlantPhoto {
+  id: number; date: string; image_path?: string | null;
+  estimated_height_cm?: number | null; health_pct?: number | null; stage?: string | null;
+  ai: PhotoAnalysis | null;
+}
+
 export interface FertItem {
   id: number; planting_id: number; day_offset: number; product: string; dosage: string;
   method: string; status: string; due_date: string; in_days?: number; planting_name?: string;

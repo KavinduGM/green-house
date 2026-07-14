@@ -2,16 +2,18 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ChevronLeft, Ruler, Sparkles, Plus, Camera, Stethoscope, FlaskConical,
-  CheckCircle2, SkipForward, Bug, Scissors, Leaf, Droplet, Trash2,
+  CheckCircle2, SkipForward, Bug, Scissors, Leaf, Droplet, Trash2, MoreVertical, Archive,
+  CalendarClock, ImagePlus,
 } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid, Scatter, ScatterChart, ComposedChart } from 'recharts';
 import { api } from '../lib/api';
 import { capturePhoto } from '../lib/camera';
-import type { Timeline, Measurement, PlantEvent, FertItem, Planting } from '../lib/types';
+import { downscaleImage } from '../lib/image';
+import type { Timeline, Measurement, PlantEvent, FertItem, Planting, PlantPhoto } from '../lib/types';
 import { Card, Loading, Modal, Field, Spinner, Pill } from '../components/ui';
 import PlantSprite from '../components/PlantSprite';
 
-type Tab = 'growth' | 'care' | 'feed';
+type Tab = 'growth' | 'care' | 'feed' | 'photos';
 
 export default function PlantDetail() {
   const { id } = useParams();
@@ -22,6 +24,14 @@ export default function PlantDetail() {
   const [events, setEvents] = useState<PlantEvent[]>([]);
   const [fert, setFert] = useState<FertItem[]>([]);
   const [tab, setTab] = useState<Tab>('growth');
+  const [manageOpen, setManageOpen] = useState(false);
+
+  const setStatus = async (status: string) => { await api.put(`/api/plantings/${id}`, { status }); setManageOpen(false); load(); };
+  const del = async () => {
+    if (!confirm(`Delete "${p?.name}" and all its measurements, care events and reminders? This cannot be undone.`)) return;
+    await api.del(`/api/plantings/${id}`);
+    nav('/plants');
+  };
 
   const load = async () => {
     const [pp, t, m, e, f] = await Promise.all([
@@ -46,7 +56,24 @@ export default function PlantDetail() {
           <p className="text-xs text-gray-400">{p.sinhala} · Day {tl.ageDays} · {p.count} plants</p>
         </div>
         <Pill tone={p.status}>{p.status}</Pill>
+        <button onClick={() => setManageOpen(true)} className="p-1.5 rounded-full hover:bg-black/5" title="Manage"><MoreVertical size={20} className="text-gray-500" /></button>
       </header>
+
+      <Modal open={manageOpen} onClose={() => setManageOpen(false)} title="Manage planting">
+        <div className="space-y-2">
+          {p.status !== 'active' && (
+            <button onClick={() => setStatus('active')} className="w-full flex items-center gap-3 rounded-xl border border-gray-200 px-3.5 py-2.5 text-sm hover:bg-gray-50">
+              <Leaf size={18} className="text-leaf-600" /> Mark as active</button>
+          )}
+          <button onClick={() => setStatus('harvested')} className="w-full flex items-center gap-3 rounded-xl border border-gray-200 px-3.5 py-2.5 text-sm hover:bg-gray-50">
+            <Scissors size={18} className="text-orange-500" /> Mark as harvested</button>
+          <button onClick={() => setStatus('removed')} className="w-full flex items-center gap-3 rounded-xl border border-gray-200 px-3.5 py-2.5 text-sm hover:bg-gray-50">
+            <Archive size={18} className="text-gray-500" /> Mark as removed</button>
+          <button onClick={del} className="w-full flex items-center gap-3 rounded-xl border border-red-200 bg-red-50 px-3.5 py-2.5 text-sm text-red-600 hover:bg-red-100">
+            <Trash2 size={18} /> Delete permanently</button>
+          <p className="text-xs text-gray-400 pt-1">“Harvested/removed” keeps the record but marks the plant done. “Delete” erases the plant and everything logged for it.</p>
+        </div>
+      </Modal>
 
       {/* hero: sprite + expected/actual */}
       <div className="px-4">
@@ -80,8 +107,8 @@ export default function PlantDetail() {
 
       {/* tabs */}
       <div className="px-4 mt-4">
-        <div className="flex bg-gray-100 rounded-xl p-1 text-sm">
-          {(['growth', 'care', 'feed'] as Tab[]).map((t) => (
+        <div className="flex bg-gray-100 rounded-xl p-1 text-[13px]">
+          {(['growth', 'care', 'feed', 'photos'] as Tab[]).map((t) => (
             <button key={t} onClick={() => setTab(t)}
               className={`flex-1 py-2 rounded-lg font-medium capitalize transition ${tab === t ? 'bg-white shadow-card text-leaf-700' : 'text-gray-500'}`}>{t}</button>
           ))}
@@ -92,6 +119,7 @@ export default function PlantDetail() {
         {tab === 'growth' && <GrowthTab id={id!} tl={tl} measure={measure} onChange={load} />}
         {tab === 'care' && <CareTab id={id!} events={events} onChange={load} />}
         {tab === 'feed' && <FeedTab fert={fert} onChange={load} />}
+        {tab === 'photos' && <PhotosTab id={id!} onChange={load} />}
       </div>
     </div>
   );
@@ -423,6 +451,86 @@ function FeedTab({ fert, onChange }: { fert: FertItem[]; onChange: () => void })
           </div>
         ))}
       </div>
+    </Card>
+  );
+}
+
+/* ---------------- Photos tab (weekly AI check-up) ---------------- */
+function PhotosTab({ id, onChange }: { id: string; onChange: () => void }) {
+  const [photos, setPhotos] = useState<PlantPhoto[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+
+  const load = async () => { setPhotos(await api.get<PlantPhoto[]>(`/api/plantings/${id}/photos`)); setLoading(false); };
+  useEffect(() => { load(); }, [id]);
+
+  const add = async (source: 'camera' | 'gallery') => {
+    setErr('');
+    try {
+      const raw = await capturePhoto(source);
+      setBusy(true);
+      const file = await downscaleImage(raw);
+      const fd = new FormData();
+      fd.append('image', file);
+      await api.form(`/api/plantings/${id}/photo`, fd);
+      await load();
+      onChange(); // AI height estimate was added as a measurement — refresh growth
+    } catch (e: any) { if (e?.message !== 'no file') setErr(e.message || 'Upload failed'); }
+    finally { setBusy(false); }
+  };
+
+  const daysSince = photos[0]?.date ? Math.floor((Date.now() - Date.parse(photos[0].date)) / 86_400_000) : null;
+  const due = daysSince == null || daysSince >= 7;
+
+  return (
+    <>
+      <Card className={due ? 'border-amber-200 bg-amber-50/40' : ''}>
+        <div className="flex items-center gap-2 mb-1">
+          <CalendarClock size={16} className={due ? 'text-amber-500' : 'text-leaf-500'} />
+          <span className="text-sm font-medium">
+            {daysSince == null ? 'No weekly photo yet' : daysSince === 0 ? 'Photo added today' : `Last photo ${daysSince}d ago`}
+            {due && daysSince != null && ' · due'}
+          </span>
+        </div>
+        <p className="text-xs text-gray-400 mb-3">Add one photo a week — AI checks growth &amp; health and updates the prediction.</p>
+        <div className="grid grid-cols-2 gap-3">
+          <button className="btn-primary" onClick={() => add('camera')} disabled={busy}>{busy ? <Spinner /> : <Camera size={18} />} {busy ? 'Analyzing…' : 'Take photo'}</button>
+          <button className="btn-ghost" onClick={() => add('gallery')} disabled={busy}><ImagePlus size={18} /> From gallery</button>
+        </div>
+        {err && <p className="text-sm text-red-600 mt-2">{err}</p>}
+      </Card>
+
+      {loading ? <Loading /> : photos.length === 0 ? (
+        <Card className="text-sm text-gray-400 text-center py-8">No photos yet. Add this week's photo above.</Card>
+      ) : photos.map((ph) => <PhotoCard key={ph.id} ph={ph} onChange={() => { load(); onChange(); }} />)}
+    </>
+  );
+}
+
+function PhotoCard({ ph, onChange }: { ph: PlantPhoto; onChange: () => void }) {
+  const ai = ph.ai;
+  const health = ph.health_pct ?? ai?.health_pct ?? null;
+  return (
+    <Card>
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-sm font-medium">{ph.date}</span>
+        <div className="flex items-center gap-2">
+          {ph.stage && <Pill tone={ph.stage === 'flowering' ? 'flowering' : ph.stage === 'fruiting' ? 'fruiting' : 'vegetative'}>{ph.stage}</Pill>}
+          {ph.estimated_height_cm != null && <span className="text-xs text-gray-400">~{ph.estimated_height_cm} cm</span>}
+          <button onClick={async () => { await api.del(`/api/plant-photos/${ph.id}`); onChange(); }} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button>
+        </div>
+      </div>
+      {ph.image_path && <img src={api.uploadUrl(ph.image_path)} className="w-full rounded-xl border mb-2" />}
+      {health != null && (
+        <div className="mb-2">
+          <div className="flex justify-between text-xs mb-1"><span className="text-gray-500">Health</span><span className="font-medium">{Math.round(health)}%</span></div>
+          <div className="h-2 rounded-full bg-gray-100 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${health}%`, background: health > 70 ? '#3a8a4f' : health > 40 ? '#f59e0b' : '#dc2626' }} /></div>
+        </div>
+      )}
+      {ai?.summary && <p className="text-sm text-gray-600 mb-2 flex gap-1.5"><Sparkles size={14} className="text-leaf-500 mt-0.5 shrink-0" />{ai.summary}</p>}
+      {ai && ai.issues?.length > 0 && <ul className="mb-2 space-y-1">{ai.issues.map((s, i) => <li key={i} className="text-sm text-red-600 flex gap-1.5"><Bug size={13} className="mt-0.5 shrink-0" />{s}</li>)}</ul>}
+      {ai && ai.recommendations?.length > 0 && <ul className="space-y-1">{ai.recommendations.map((s, i) => <li key={i} className="text-sm text-gray-600 flex gap-1.5"><Leaf size={13} className="text-leaf-400 mt-0.5 shrink-0" />{s}</li>)}</ul>}
     </Card>
   );
 }

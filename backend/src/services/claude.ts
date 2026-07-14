@@ -141,6 +141,42 @@ fungicides, correcting feed/water). Output ONLY JSON:
   });
 }
 
+export interface PhotoAnalysis {
+  stage: string;                 // seedling | vegetative | flowering | fruiting | mature
+  health_pct: number;            // 0-100
+  estimated_height_cm: number | null;
+  summary: string;
+  observations: string[];
+  issues: string[];
+  recommendations: string[];
+}
+
+export async function analyzePlantPhoto(opts: {
+  base64: string; media: ImageMedia; plant: string; ageDays: number; expectedHeightCm: number;
+}): Promise<PhotoAnalysis> {
+  const text = await complete(
+    `You are an expert greenhouse agronomist doing a weekly photo check-up of a single plant.
+From the photo, assess it. Estimate its current height in cm (use the pot/leaves for scale; the
+grower's model expects roughly ${opts.expectedHeightCm} cm at day ${opts.ageDays}). Rate overall
+health 0-100. Identify the growth stage. Note visible issues (pests, disease, nutrient deficiency,
+water stress, etc.) and give 2-4 short, practical recommendations (watering, feeding with Albert
+Solution / YaraMila Target / Grow More K44, pruning, pest control). Output ONLY JSON:
+{"stage":"vegetative","health_pct":85,"estimated_height_cm":32,"summary":"...","observations":["..."],"issues":["..."],"recommendations":["..."]}`,
+    [
+      { type: 'image', source: { type: 'base64', media_type: opts.media, data: opts.base64 } },
+      { type: 'text', text: `Plant: ${opts.plant}, day ${opts.ageDays}. Analyze this week's photo.` },
+    ],
+    1400,
+  );
+  const parsed = extractJson<PhotoAnalysis>(text, {
+    stage: 'unknown', health_pct: 0, estimated_height_cm: null,
+    summary: 'Could not analyze the photo automatically.', observations: [], issues: [], recommendations: [],
+  });
+  parsed.health_pct = Math.max(0, Math.min(100, Number(parsed.health_pct) || 0));
+  if (parsed.estimated_height_cm != null) parsed.estimated_height_cm = Math.max(0, Number(parsed.estimated_height_cm) || 0);
+  return parsed;
+}
+
 export async function askAssistant(question: string, context?: object): Promise<string> {
   return complete(
     `You are the in-app greenhouse assistant for a Sri Lankan grower (crops: brinjal, chilli, tomato,

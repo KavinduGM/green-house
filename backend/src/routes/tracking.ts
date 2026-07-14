@@ -6,7 +6,7 @@ import { db, now } from '../db.js';
 import { config, hasClaude } from '../config.js';
 import { timeline, predictedForLog, getModel, type PlantingRow } from '../services/growth.js';
 import { dueFertilizer } from '../services/fertilizer.js';
-import { growthInsight, diagnoseDefect } from '../services/claude.js';
+import { growthInsight, diagnoseDefect, analyzePlantPhoto } from '../services/claude.js';
 import { projectId } from '../project.js';
 
 export const trackingRouter = Router();
@@ -109,6 +109,53 @@ trackingRouter.post('/plantings/:id/diagnose', upload.single('photo'), async (re
   } catch (e: any) {
     res.status(500).json({ error: e.message });
   }
+});
+
+// ---- weekly progress photos + AI analysis ----
+trackingRouter.get('/plantings/:id/photos', (req, res) => {
+  const rows = db.prepare('SELECT * FROM plant_photos WHERE planting_id = ? ORDER BY date DESC, id DESC').all(req.params.id) as any[];
+  res.json(rows.map((r) => ({ ...r, ai: r.ai_json ? JSON.parse(r.ai_json) : null })));
+});
+
+trackingRouter.post('/plantings/:id/photo', upload.single('image'), async (req, res) => {
+  const p = getPlanting(req.params.id);
+  if (!p) return res.status(404).json({ error: 'not found' });
+  if (!req.file) return res.status(400).json({ error: 'image required' });
+  if (!hasClaude()) return res.status(400).json({ error: 'AI not configured on server.' });
+
+  const ext = req.file.mimetype === 'image/png' ? 'png' : req.file.mimetype === 'image/webp' ? 'webp' : 'jpg';
+  const fn = `photo-${p.id}-${Date.now()}.${ext}`;
+  fs.writeFileSync(path.join(config.uploadDir, fn), req.file.buffer);
+  const imagePath = `/uploads/${fn}`;
+  const date = req.body?.date ?? today();
+
+  try {
+    const t = timeline(p, new Date().toISOString());
+    const media = req.file.mimetype === 'image/png' ? 'image/png' : req.file.mimetype === 'image/webp' ? 'image/webp' : 'image/jpeg';
+    const ai = await analyzePlantPhoto({
+      base64: req.file.buffer.toString('base64'), media: media as any,
+      plant: `${t.model.english} (${t.model.sinhala})`, ageDays: t.ageDays, expectedHeightCm: t.expectedHeightToday,
+    });
+
+    const info = db
+      .prepare('INSERT INTO plant_photos (planting_id, date, image_path, estimated_height_cm, health_pct, stage, ai_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(p.id, date, imagePath, ai.estimated_height_cm ?? null, ai.health_pct ?? null, ai.stage ?? null, JSON.stringify(ai), now());
+
+    // feed the AI height estimate into the growth model so predictions improve
+    if (ai.estimated_height_cm && ai.estimated_height_cm > 0) {
+      const predicted = predictedForLog(p, date);
+      db.prepare('INSERT INTO measurements (planting_id, date, metric, value, predicted, source, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run(p.id, date, 'height_cm', ai.estimated_height_cm, predicted, 'photo_ai', now());
+    }
+    res.json({ id: info.lastInsertRowid, image: imagePath, ai });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+trackingRouter.delete('/plant-photos/:id', (req, res) => {
+  db.prepare('DELETE FROM plant_photos WHERE id = ?').run(req.params.id);
+  res.json({ ok: true });
 });
 
 // ---- fertilizer plan & reminders ----
